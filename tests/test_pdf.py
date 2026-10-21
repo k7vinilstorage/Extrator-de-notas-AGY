@@ -1,7 +1,7 @@
 import pytest
 from PIL import Image
 
-from extrator_agy.pdf import PdfInvalido, paginas_usadas, renderizar
+from extrator_agy.pdf import MAX_PIXELS, PdfInvalido, paginas_usadas, renderizar
 
 
 def criar_pdf(caminho, paginas):
@@ -28,3 +28,11 @@ def test_pdf_invalido(tmp_path, conteudo):
     pdf.write_bytes(conteudo)
     with pytest.raises(PdfInvalido):
         renderizar(pdf, tmp_path)
+
+
+def test_pagina_gigante_respeita_o_teto_de_pixels(tmp_path):
+    # 300x400 px a 1 dpi viram uma página de 300x400 polegadas: 45000x60000 px a 150 dpi.
+    pdf = tmp_path / "gigante.pdf"
+    Image.new("RGB", (300, 400), "white").save(pdf, resolution=1.0)
+    imagem = Image.open(renderizar(pdf, tmp_path)[0])
+    assert imagem.width * imagem.height <= MAX_PIXELS * 1.01  # o pdfium arredonda os lados para cima

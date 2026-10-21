@@ -8,7 +8,9 @@ ENV PYTHONUNBUFFERED=1 \
     PATH=/opt/venv/bin:$PATH \
     # O binário fica em /usr/local/bin, que o usuário app não pode alterar;
     # para atualizar o agy, reconstrua a imagem.
-    AGY_CLI_DISABLE_AUTO_UPDATE=1
+    AGY_CLI_DISABLE_AUTO_UPDATE=1 \
+    # Faxina do /tmp e dos restos do agy (veja faxina.py); fora do Docker fica desligada.
+    EXTRATOR_FAXINA=1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl tzdata \
