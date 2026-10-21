@@ -1,0 +1,172 @@
+# Extrator AGY
+
+Extrai os dados principais de notas e cupons fiscais brasileiros (fotos de cupom NFC-e,
+DANFE de NF-e, NFS-e e CF-e SAT, em imagem ou PDF) usando a [agy CLI](https://antigravity.google).
+Roda como API HTTP em Docker ou como linha de comando.
+
+Dados extraídos (do emitente):
+
+```json
+{
+  "cpf_cnpj": "75.315.333/0364-80",
+  "razao_social": "ATACADAO S.A.",
+  "uf": "SP",
+  "municipio": "SAO PAULO",
+  "numero_nota": "5340",
+  "data_emissao": "2026-06-06T13:11:33",
+  "valor_total": 420.78,
+  "chave_acesso": "35260675315333036480655120000053401048579176",
+  "categoria_gasto": "mercado"
+}
+```
+
+Campos que não aparecem ou estão ilegíveis vêm como `null`. Categorias possíveis estão em
+`src/extrator_agy/schema.py`.
+
+## Deploy com Docker
+
+Requer Docker com Compose. O `agy` é instalado dentro da imagem.
+
+```sh
+# 1. Configuração: defina ao menos EXTRATOR_API_TOKEN
+cp .env.example .env
+sed -i "s/^EXTRATOR_API_TOKEN=.*/EXTRATOR_API_TOKEN=$(openssl rand -hex 32)/" .env
+
+# 2. Build
+docker compose build
+
+# 3. Login do agy com sua conta Google (só uma vez)
+docker compose run --rm -it extrator agy
+#    Abra a URL mostrada no navegador, autorize, copie o código exibido e cole no terminal.
+#    Depois que o agy abrir, saia com Ctrl+C. O login fica salvo no volume agy-login.
+
+# 4. Subir a API
+docker compose up -d
+
+# 5. Conferir se o agy está logado e respondendo
+TOKEN=$(grep ^EXTRATOR_API_TOKEN .env | cut -d= -f2)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/saude/agy
+```
+
+O login sobrevive a `docker compose down`, rebuilds e restarts; só se perde com
+`docker compose down -v` (que apaga o volume). Para trocar de conta, rode o passo 3 de novo e
+use `/logout` dentro do agy.
+
+Para atualizar o agy, reconstrua a imagem sem cache: `docker compose build --no-cache`.
+
+### Configuração (`.env`)
+
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `EXTRATOR_API_TOKEN` | — | Obrigatório. Token exigido em `Authorization: Bearer` |
+| `EXTRATOR_PORTA` | `8000` | Porta exposta no host |
+| `EXTRATOR_MODELO` | `Gemini 3.8 Flash (Low)` | Modelo do agy (`docker compose run --rm extrator agy models`) |
+| `EXTRATOR_PARALELO` | `4` | Chamadas simultâneas ao agy (para `/extrair` e `/lotes` juntos) |
+| `EXTRATOR_TIMEOUT` | `90` | Segundos por chamada ao agy |
+| `EXTRATOR_REVISAR` | `1` | Reler notas que falharem na validação (`0` desliga, mais rápido) |
+| `EXTRATOR_MAX_MB` | `20` | Tamanho máximo por arquivo |
+| `EXTRATOR_MAX_ARQUIVOS_LOTE` | `100` | Arquivos por lote |
+| `EXTRATOR_LOTE_TTL_MIN` | `60` | Minutos que um lote concluído fica disponível |
+| `EXTRATOR_LIMPAR_HISTORICO` | `1` | Apaga o histórico que o agy grava de cada conversa (~1 MB por nota) |
+| `TZ` | `America/Sao_Paulo` | Fuso horário do container |
+
+## API
+
+Documentação interativa em `http://localhost:8000/docs`. Todas as rotas, exceto `/saude`,
+exigem `Authorization: Bearer <EXTRATOR_API_TOKEN>`. Formatos aceitos: `.jpg`, `.jpeg`,
+`.png`, `.webp`, `.pdf`.
+
+### `POST /extrair`: uma nota, resposta direta (~10–30 s)
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" -F "arquivo=@cupom.jpg" http://localhost:8000/extrair
+```
+
+```json
+{
+  "arquivo": "cupom.jpg",
+  "status": "ok",
+  "nota": { "cpf_cnpj": "...", "razao_social": "...", "...": "..." },
+  "problemas": [],
+  "origem_chave": "QR"
+}
+```
+
+`status` é `ok` ou `alerta`; em `alerta`, `problemas` lista o que não bateu na validação
+(ex.: dígito verificador da chave inválido). `origem_chave` diz se a chave veio do QR code ou
+da leitura da foto.
+
+### `POST /lotes` + `GET /lotes/{id}`: várias notas em segundo plano
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" -F "arquivos=@nota1.jpg" -F "arquivos=@nota2.pdf" \
+     http://localhost:8000/lotes
+# {"id": "3f2a...", "total": 2, "url": "/lotes/3f2a..."}
+
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/lotes/3f2a...
+```
+
+```json
+{
+  "id": "3f2a...",
+  "status": "processando",
+  "criado_em": "2026-10-21T11:00:00-03:00",
+  "total": 2,
+  "concluidos": 1,
+  "resultados": [
+    { "arquivo": "nota1.jpg", "status": "ok", "nota": { "...": "..." }, "problemas": [], "origem_chave": "QR" },
+    { "arquivo": "nota2.pdf", "status": "processando" }
+  ]
+}
+```
+
+Cada resultado passa por `pendente` → `processando` → `ok`, `alerta` ou `erro` (com o campo
+`erro`). O lote fica `concluido` quando todos terminam. Os lotes ficam só em memória: somem
+após `EXTRATOR_LOTE_TTL_MIN` ou num restart do container.
+
+### Erros
+
+| Código | Quando |
+|---|---|
+| 401 | Token ausente ou errado |
+| 413 | Arquivo grande demais ou lote com arquivos demais |
+| 415 | Formato não suportado |
+| 502 | O agy falhou duas vezes seguidas nessa nota |
+| 503 | O agy está sem login (rode o passo 3 do deploy) |
+
+## Linha de comando
+
+Requer o `agy` instalado e autenticado na máquina, e o [uv](https://docs.astral.sh/uv/).
+
+```sh
+uv sync
+uv run extrator notas/                  # processa a pasta notas/ e grava em saida/
+uv run extrator notas/ -o resultados/   # outra pasta de saída
+uv run extrator foto1.jpg foto2.pdf     # arquivos avulsos
+uv run extrator notas/ -r -j 8          # inclui subpastas e processa 8 por vez
+uv run extrator notas/ --forcar         # reprocessa o que já tem JSON
+uv run extrator notas/ --sem-revisao    # não relê notas que falharem na validação
+uv run extrator notas/ -m "Gemini 4 Argon (Medium)"   # modelo mais forte para fotos ruins
+```
+
+Grava `saida/<arquivo>.json`, um por nota. Notas que já têm JSON no formato atual são puladas.
+
+## Como funciona
+
+1. **QR code** (`qr.py`): tenta ler o QR do cupom localmente. Quando consegue, a chave de
+   acesso vem exata dele, sem depender da leitura dos 44 dígitos impressos.
+2. **agy** (`agy.py`): o arquivo é copiado para um diretório temporário, que vira o único
+   workspace do agente, rodando em modo não interativo e somente leitura
+   (`--print --mode plan`) com `--json-schema` para fixar o formato da resposta.
+   Chamadas que falham ou passam do timeout são repetidas uma vez.
+3. **Validação** (`validacao.py`): confere o dígito verificador do CPF/CNPJ e da chave, e se
+   UF, ano/mês, CPF/CNPJ e número embutidos na chave batem com o que foi lido. Se algo falhar,
+   a nota é lida de novo uma vez, informando ao modelo os problemas encontrados.
+
+O fluxo fica em `extracao.py`, compartilhado pela API (`api.py`) e pela CLI (`cli.py`).
+
+## Testes
+
+```sh
+uv run pytest
+```
