@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+from datetime import datetime
 from pathlib import Path
 
 from .schema import CATEGORIAS, NOTA
@@ -40,17 +41,17 @@ class ErroAgy(RuntimeError):
     pass
 
 
-def apagar_conversa(conversation_id: str) -> None:
+def apagar_conversa(conversation_id: str, dados_agy: Path = DADOS_AGY) -> None:
     """Remove o histórico que o agy grava de cada conversa (~1 MB por nota, com a imagem)."""
     if not re.fullmatch(r"[0-9a-f-]{36}", conversation_id or ""):
         return
     for caminho in (
-        DADOS_AGY / "conversations" / f"{conversation_id}.db",
-        DADOS_AGY / "annotations" / f"{conversation_id}.pbtxt",
-        DADOS_AGY / "presence" / f"{conversation_id}.lock",
+        dados_agy / "conversations" / f"{conversation_id}.db",
+        dados_agy / "annotations" / f"{conversation_id}.pbtxt",
+        dados_agy / "presence" / f"{conversation_id}.lock",
     ):
         caminho.unlink(missing_ok=True)
-    shutil.rmtree(DADOS_AGY / "brain" / conversation_id, ignore_errors=True)
+    shutil.rmtree(dados_agy / "brain" / conversation_id, ignore_errors=True)
 
 
 def rodar_agy(args: list[str], cwd: str, timeout_s: int, limpar_historico: bool = False) -> dict:
@@ -63,7 +64,7 @@ def rodar_agy(args: list[str], cwd: str, timeout_s: int, limpar_historico: bool 
         raise ErroAgy("agy não encontrado no PATH")
 
     proc = subprocess.Popen(
-        ["agy", *args, "--output-format", "json", "--disable-slash-commands", "--print-timeout", f"{timeout_s}s"],
+        ["agy", *args, "--output-format", "json", "--print-timeout", f"{timeout_s}s"],
         cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     sem_login = threading.Event()
@@ -148,10 +149,37 @@ def extrair(
             prompt += DICA_REVISAO.format(problemas="; ".join(problemas))
 
         saida = rodar_agy(
-            ["--print", prompt, "--add-dir", tmp, "--model", modelo, "--json-schema", json.dumps(NOTA)],
+            ["--print", prompt, "--add-dir", tmp, "--model", modelo, "--json-schema", json.dumps(NOTA),
+             "--disable-slash-commands"],
             cwd=tmp, timeout_s=timeout_s, limpar_historico=limpar_historico,
         )
 
     if not isinstance(saida.get("structured_output"), dict):
         raise ErroAgy("resposta do agy sem structured_output")
     return saida["structured_output"]
+
+
+# Cotas do grupo de modelos Gemini (Flash e Pro dividem as mesmas) no /usage do agy.
+COTAS = {"semanal": "gemini-weekly", "cinco_horas": "gemini-5h"}
+
+
+def consultar_limites(timeout_s: int = 60) -> dict:
+    """Quanto resta das cotas semanal e de 5 horas dos modelos Gemini, e quando renovam.
+
+    O `/usage` não chama o modelo nem gasta cota, mas leva de 3 s a mais de 1 min:
+    o serviço de cota às vezes responde 503 e o agy insiste antes de desistir.
+    """
+    with tempfile.TemporaryDirectory(prefix="extrator-agy-") as tmp:
+        # O log fica na pasta temporária: uma consulta por minuto encheria log/.
+        saida = rodar_agy(["--print", "/usage", "--log-file", f"{tmp}/agy.log"], cwd=tmp, timeout_s=timeout_s)
+    try:
+        cotas = {c["id"]: c for g in saida["command"]["data"]["groups"] for c in g["buckets"]}
+        return {
+            nome: {
+                "restante_pct": round(cotas[id_]["remaining_fraction"] * 100, 1),
+                "renova_em": datetime.fromisoformat(cotas[id_]["reset_time"]).astimezone().isoformat(timespec="seconds"),
+            }
+            for nome, id_ in COTAS.items()
+        }
+    except (KeyError, TypeError, ValueError) as e:
+        raise ErroAgy(f"resposta inesperada do /usage do agy ({e!r})") from None
