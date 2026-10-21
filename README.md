@@ -1,4 +1,4 @@
-# Extrator AGY
+# Extrator de notas - AGY
 
 Extrai os dados principais de notas e cupons fiscais brasileiros (fotos de cupom NFC-e,
 DANFE de NF-e, NFS-e e CF-e SAT, em imagem ou PDF) usando a [agy CLI](https://antigravity.google).

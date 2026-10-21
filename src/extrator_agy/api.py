@@ -46,7 +46,7 @@ lotes: dict[str, dict] = {}
 trava = threading.Lock()
 
 app = FastAPI(
-    title="Extrator AGY",
+    title="Extrator de notas - AGY",
     version=__version__,
     description="Extrai CPF/CNPJ, razão social, UF, município, número, data, valor, chave de acesso "
                 "e categoria de gasto de notas e cupons fiscais (fotos e PDFs) usando a agy CLI.",
