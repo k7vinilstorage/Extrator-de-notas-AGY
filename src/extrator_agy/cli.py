@@ -9,6 +9,7 @@ from pathlib import Path
 from . import __version__
 from .agy import MODELO_PADRAO, ErroAgy
 from .extracao import CAMPOS, Config, processar
+from .pdf import PdfInvalido
 
 EXTENSOES = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
 
@@ -99,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
             arquivo = tarefas[tarefa]
             try:
                 r = tarefa.result()
-            except ErroAgy as e:
+            except (ErroAgy, PdfInvalido) as e:
                 erros += 1
                 print(f"✗ {arquivo.name}: {e}")
                 continue

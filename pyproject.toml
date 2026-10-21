@@ -1,12 +1,13 @@
 [project]
 name = "extrator-agy"
-version = "0.1.0"
+version = "0.2.0"
 description = "Extrai dados de notas e cupons fiscais (fotos e PDFs) usando a agy CLI"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.156.8",
     "pillow>=13.0.0",
+    "pypdfium2>=5.14.0",
     "python-multipart>=0.0.32",
     "uvicorn[standard]>=0.54.0",
     "zxing-cpp>=3.1.1",
