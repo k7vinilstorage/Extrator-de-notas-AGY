@@ -64,13 +64,14 @@ Para atualizar o agy, reconstrua a imagem sem cache: `docker compose build --no-
 | `EXTRATOR_API_TOKEN` | — | Obrigatório. Token exigido em `Authorization: Bearer` |
 | `EXTRATOR_PORTA` | `8000` | Porta exposta no host |
 | `EXTRATOR_MODELO` | `Gemini 3.8 Flash (Low)` | Modelo do agy (`docker compose run --rm extrator agy models`) |
-| `EXTRATOR_PARALELO` | `4` | Chamadas simultâneas ao agy (para `/extrair` e `/lotes` juntos) |
+| `EXTRATOR_PARALELO` | `4` | Chamadas simultâneas ao agy (para `/extrair` e `/lotes` juntos). Cada agy usa ~200 MB de RAM |
 | `EXTRATOR_TIMEOUT` | `90` | Segundos por chamada ao agy |
 | `EXTRATOR_REVISAR` | `1` | Reler notas que falharem na validação (`0` desliga, mais rápido) |
 | `EXTRATOR_MAX_MB` | `20` | Tamanho máximo por arquivo |
 | `EXTRATOR_MAX_ARQUIVOS_LOTE` | `100` | Arquivos por lote |
 | `EXTRATOR_LOTE_TTL_MIN` | `60` | Minutos que um lote concluído fica disponível |
 | `EXTRATOR_LIMPAR_HISTORICO` | `1` | Apaga o histórico que o agy grava de cada conversa (~1 MB por nota) |
+| `EXTRATOR_FAXINA` | `1` na imagem | Faxina automática (veja [Faxina](#faxina)). Já vem ligada no Dockerfile |
 | `TZ` | `America/Sao_Paulo` | Fuso horário do container |
 
 ## API
@@ -127,6 +128,28 @@ Cada resultado passa por `pendente` → `processando` → `ok`, `alerta` ou `err
 `erro`). O lote fica `concluido` quando todos terminam. Os lotes ficam só em memória: somem
 após `EXTRATOR_LOTE_TTL_MIN` ou num restart do container.
 
+### `GET /limites`: quanto resta da cota do agy
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/limites
+```
+
+```json
+{
+  "modelo": "Gemini 3.8 Flash (Low)",
+  "semanal": { "restante_pct": 44.7, "renova_em": "2026-10-25T20:49:04-03:00" },
+  "cinco_horas": { "restante_pct": 91.5, "renova_em": "2026-10-21T19:01:14-03:00" },
+  "consultado_em": "2026-10-21T15:10:00-03:00"
+}
+```
+
+É a cota que o Gemini Flash (Low) consome: a do grupo de modelos Gemini, que todos os Flash e
+Pro dividem, com um limite semanal e um de 5 horas. Vem do `/usage` do agy, que não chama o modelo nem gasta
+cota, mas leva de 3 s a mais de 1 min (o serviço de cota do Google às vezes responde 503). Por
+isso a resposta sai de um cache e é atualizada em segundo plano a cada minuto em que há
+consulta; `consultado_em` diz de quando é. Só a primeira chamada, ou uma depois de 15 min sem
+consulta bem-sucedida, espera o agy: use um timeout de cliente de ~2 min.
+
 ### Erros
 
 | Código | Quando |
@@ -135,8 +158,9 @@ após `EXTRATOR_LOTE_TTL_MIN` ou num restart do container.
 | 413 | Arquivo grande demais ou lote com arquivos demais |
 | 415 | Formato não suportado |
 | 422 | PDF ilegível ou protegido por senha |
-| 502 | O agy falhou duas vezes seguidas nessa nota |
+| 502 | O agy falhou duas vezes seguidas nessa nota, ou não conseguiu consultar a cota |
 | 503 | O agy está sem login (rode o passo 3 do deploy) |
+| 504 | A consulta da cota não terminou a tempo |
 
 ## Linha de comando
 
@@ -178,6 +202,25 @@ Grava `saida/<arquivo>.json`, um por nota. Notas que já têm JSON no formato at
    informando ao modelo os problemas encontrados.
 
 O fluxo fica em `extracao.py`, compartilhado pela API (`api.py`) e pela CLI (`cli.py`).
+
+### Faxina
+
+A cada chamada o agy deixa restos que ele mesmo não apaga: um log (~30 KB), uma linha em
+`conversation_summaries.db`, um arquivo em `implicit/` e uma entrada em
+`cache/last_conversations.json` (que ele relê e regrava inteiro a cada chamada). Quando o agy é
+morto antes de responder, sobra também a conversa inteira (~1 MB). E um restart no meio de um
+lote deixa os uploads no `/tmp`.
+
+A API faz uma faxina (`faxina.py`) ao ligar e a cada pedido novo, no máximo uma vez a cada
+10 min, em segundo plano. Apaga:
+
+- conversas do agy com mais de 1 hora, e o que sobrou delas nos arquivos acima;
+- logs do agy com mais de 7 dias;
+- pastas do extrator no `/tmp` com mais de 2 horas que não sejam de um lote ainda na fila.
+
+Os dados do agy só são tocados com `EXTRATOR_LIMPAR_HISTORICO=1`. A faxina vem ligada apenas na
+imagem Docker (`EXTRATOR_FAXINA=1`): rodando a API fora dela, apagaria o histórico do seu agy
+pessoal.
 
 ## Testes
 

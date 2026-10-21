@@ -5,6 +5,7 @@ Rodar com um único processo (os lotes ficam em memória):
 """
 
 import asyncio
+import logging
 import os
 import secrets
 import shutil
@@ -13,6 +14,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -20,8 +22,9 @@ from fastapi import Depends, FastAPI, HTTPException, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from . import __version__
-from .agy import DICA_LOGIN, MODELO_PADRAO, ErroAgy, rodar_agy
+from .agy import DADOS_AGY, DICA_LOGIN, MODELO_PADRAO, ErroAgy, consultar_limites, rodar_agy
 from .extracao import Config, processar
+from .faxina import faxinar
 from .pdf import PdfInvalido
 
 EXTENSOES = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
@@ -37,6 +40,8 @@ PARALELO = int(os.environ.get("EXTRATOR_PARALELO", "4"))
 MAX_BYTES = int(os.environ.get("EXTRATOR_MAX_MB", "20")) * 1024 * 1024
 MAX_ARQUIVOS_LOTE = int(os.environ.get("EXTRATOR_MAX_ARQUIVOS_LOTE", "100"))
 LOTE_TTL_S = int(os.environ.get("EXTRATOR_LOTE_TTL_MIN", "60")) * 60
+# Ligada só na imagem Docker: fora dela, os dados do agy são os do usuário.
+FAXINA = os.environ.get("EXTRATOR_FAXINA", "0") != "0"
 
 if not TOKEN:
     raise RuntimeError("defina EXTRATOR_API_TOKEN (ex.: openssl rand -hex 32)")
@@ -45,12 +50,35 @@ if not TOKEN:
 executor = ThreadPoolExecutor(max_workers=PARALELO, thread_name_prefix="agy")
 lotes: dict[str, dict] = {}
 trava = threading.Lock()
+# Pastas do /tmp com uploads que ainda vão ser lidos: a faxina não pode apagá-las.
+pastas_em_uso: set[Path] = set()
+
+FAXINA_INTERVALO_S = 10 * 60
+ultima_faxina = 0.0
+
+# O /usage leva de 3 s a mais de 1 min, então a cota sai do cache e é atualizada em
+# segundo plano; só se espera a consulta quando não há resposta boa recente.
+LIMITES_CACHE_S = 60
+LIMITES_VALIDADE_S = 15 * 60
+fila_limites = ThreadPoolExecutor(max_workers=1, thread_name_prefix="limites")
+limites: dict = {"dados": None, "em": 0.0, "consulta": None}
+
+log = logging.getLogger("uvicorn.error")
+
+
+@asynccontextmanager
+async def ao_ligar(_app):
+    agendar_faxina()
+    atualizar_limites()
+    yield
+
 
 app = FastAPI(
     title="Extrator de notas - AGY",
     version=__version__,
     description="Extrai CPF/CNPJ, razão social, UF, município, número, data, valor, chave de acesso "
                 "e categoria de gasto de notas e cupons fiscais (fotos e PDFs) usando a agy CLI.",
+    lifespan=ao_ligar,
 )
 bearer = HTTPBearer(auto_error=False)
 
@@ -78,6 +106,53 @@ async def salvar_upload(upload: UploadFile, destino: Path) -> Path:
     return caminho
 
 
+@contextmanager
+def em_uso(pasta: Path):
+    with trava:
+        pastas_em_uso.add(pasta)
+    try:
+        yield pasta
+    finally:
+        with trava:
+            pastas_em_uso.discard(pasta)
+
+
+def _faxinar(pastas: set[Path]):
+    try:
+        apagados = faxinar(Path(tempfile.gettempdir()), DADOS_AGY if CONFIG.limpar_historico else None, pastas)
+    except Exception:  # a faxina nunca derruba a API
+        log.exception("faxina falhou")
+        return
+    if any(apagados.values()):
+        log.info("faxina: %s", ", ".join(f"{n} {onde}" for onde, n in apagados.items() if n))
+
+
+def agendar_faxina():
+    """Faxina em segundo plano, no máximo uma vez a cada FAXINA_INTERVALO_S."""
+    global ultima_faxina
+    with trava:
+        if not FAXINA or time.time() - ultima_faxina < FAXINA_INTERVALO_S:
+            return
+        ultima_faxina = time.time()
+        pastas = set(pastas_em_uso)
+    threading.Thread(target=_faxinar, args=(pastas,), name="faxina", daemon=True).start()
+
+
+def _consultar_limites():
+    dados = consultar_limites()
+    with trava:
+        limites.update(dados=dados, em=time.time())
+
+
+def atualizar_limites():
+    """Dispara uma consulta da cota se o cache venceu e devolve a consulta em andamento."""
+    with trava:
+        consulta = limites["consulta"]
+        if time.time() - limites["em"] >= LIMITES_CACHE_S and (consulta is None or consulta.done()):
+            consulta = limites["consulta"] = fila_limites.submit(_consultar_limites)
+        return consulta
+
+
 def resposta(nome: str, resultado) -> dict:
     return {
         "arquivo": nome,
@@ -96,16 +171,35 @@ def saude():
 @app.get("/saude/agy", summary="Faz uma chamada real ao agy para confirmar o login", dependencies=[Depends(autenticar)])
 def saude_agy():
     try:
-        saida = rodar_agy(["--print", "Responda apenas: ok", "--model", CONFIG.modelo],
+        saida = rodar_agy(["--print", "Responda apenas: ok", "--model", CONFIG.modelo, "--disable-slash-commands"],
                           cwd=tempfile.gettempdir(), timeout_s=60, limpar_historico=True)
     except ErroAgy as e:
         raise HTTPException(503, f"agy com erro: {e}") from None
     return {"status": "ok", "modelo": CONFIG.modelo, "duracao_s": saida.get("duration_seconds")}
 
 
+@app.get("/limites", summary="Quanto resta da cota do agy para os modelos Gemini: semanal e de 5 horas",
+         dependencies=[Depends(autenticar)])
+def ver_limites():
+    consulta = atualizar_limites()
+    if time.time() - limites["em"] >= LIMITES_VALIDADE_S:
+        try:
+            consulta.result(timeout=120)
+        except ErroAgy as e:
+            codigo = 503 if str(e).startswith(DICA_LOGIN) else 502
+            raise HTTPException(codigo, f"falha ao consultar a cota no agy: {e}") from None
+        except TimeoutError:
+            raise HTTPException(504, "o agy não respondeu à consulta da cota") from None
+    with trava:
+        dados, em = limites["dados"], limites["em"]
+    return {"modelo": CONFIG.modelo, **dados,
+            "consultado_em": datetime.fromtimestamp(em).astimezone().isoformat(timespec="seconds")}
+
+
 @app.post("/extrair", summary="Extrai uma nota e espera o resultado", dependencies=[Depends(autenticar)])
 async def extrair_nota(arquivo: UploadFile):
-    with tempfile.TemporaryDirectory(prefix="extrator-api-") as tmp:
+    agendar_faxina()
+    with tempfile.TemporaryDirectory(prefix="extrator-api-") as tmp, em_uso(Path(tmp)):
         caminho = await salvar_upload(arquivo, Path(tmp))
         try:
             resultado = await asyncio.wrap_future(executor.submit(processar, caminho, CONFIG))
@@ -132,6 +226,7 @@ def _processar_item(lote: dict, i: int, caminho: Path):
             if lote["concluidos"] == lote["total"]:
                 lote["status"] = "concluido"
                 lote["concluido_em"] = time.time()
+                pastas_em_uso.discard(lote["_dir"])
                 shutil.rmtree(lote["_dir"], ignore_errors=True)
 
 
@@ -154,6 +249,7 @@ async def criar_lote(arquivos: list[UploadFile]):
     if len(arquivos) > MAX_ARQUIVOS_LOTE:
         raise HTTPException(413, f"no máximo {MAX_ARQUIVOS_LOTE} arquivos por lote")
     _limpar_lotes_antigos()
+    agendar_faxina()
 
     diretorio = Path(tempfile.mkdtemp(prefix="extrator-lote-"))
     try:
@@ -174,6 +270,7 @@ async def criar_lote(arquivos: list[UploadFile]):
     }
     with trava:
         lotes[id_] = lote
+        pastas_em_uso.add(diretorio)
     for i, caminho in enumerate(caminhos):
         executor.submit(_processar_item, lote, i, caminho)
     return {"id": id_, "total": lote["total"], "url": f"/lotes/{id_}"}
