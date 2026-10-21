@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from extrator_agy import api  # noqa: E402
 from extrator_agy.agy import ErroAgy  # noqa: E402
 from extrator_agy.extracao import Resultado  # noqa: E402
+from extrator_agy.pdf import PdfInvalido  # noqa: E402
 
 AUTH = {"Authorization": "Bearer segredo-de-teste"}
 NOTA = {"cpf_cnpj": "04.140.144/0001-02", "razao_social": "POSTO Z1 LTDA", "valor_total": 100.0}
@@ -20,6 +21,8 @@ def cliente(monkeypatch):
     def falso(caminho, config):
         if caminho.read_bytes() == b"falha":
             raise ErroAgy("sem login")
+        if caminho.read_bytes() == b"pdf ruim":
+            raise PdfInvalido("PDF ilegível")
         return Resultado(NOTA, [], "QR")
 
     monkeypatch.setattr(api, "processar", falso)
@@ -51,6 +54,12 @@ def test_extrair_falha_agy(cliente):
     r = cliente.post("/extrair", files={"arquivo": ("cupom.jpg", b"falha")}, headers=AUTH)
     assert r.status_code == 502
     assert "sem login" in r.json()["detail"]
+
+
+def test_extrair_pdf_invalido(cliente):
+    r = cliente.post("/extrair", files={"arquivo": ("nota.pdf", b"pdf ruim")}, headers=AUTH)
+    assert r.status_code == 422
+    assert r.json()["detail"] == "nota.pdf: PDF ilegível"
 
 
 def test_lote(cliente):

@@ -13,12 +13,14 @@ from .schema import CATEGORIAS, NOTA
 MODELO_PADRAO = "Gemini 3.8 Flash (Low)"
 
 PROMPT = """\
-Leia {arquivo}, foto ou PDF de um documento fiscal brasileiro, e extraia:
-- cpf_cnpj, razao_social, uf, municipio: do EMITENTE (quem vendeu), como impressos.
-- numero_nota, data_emissao (ISO 8601, AAAA-MM-DDTHH:MM:SS), valor_total (número, ponto decimal).
-- chave_acesso: os 44 dígitos, sem espaços.
+Leia {arquivos}: foto ou páginas de um comprovante de gasto no Brasil, seja nota ou cupom fiscal
+(NFC-e, NF-e, NFS-e, CF-e SAT) ou recibo sem valor fiscal (corrida de app, por exemplo), e extraia:
+- cpf_cnpj, razao_social, uf, municipio: do EMITENTE (quem vendeu ou prestou o serviço), como impressos.
+- numero_nota, data_emissao (só a data, sem hora: AAAA-MM-DD), valor_total (número, ponto decimal).
+- chave_acesso: os 44 dígitos (50 na NFS-e nacional), sem espaços.
 - categoria_gasto: {categorias}.
-Use null para o que não aparecer ou estiver ilegível; não invente. Só leia o arquivo, nada mais.
+Use null para o que não aparecer ou estiver ilegível; não invente. Recibos costumam não ter chave
+nem número de nota. Só abra as imagens com read_file; não rode comandos.
 """
 
 DICA_QR = "A chave de acesso, lida do QR code, é {chave}. Use-a.\n"
@@ -109,35 +111,44 @@ def rodar_agy(args: list[str], cwd: str, timeout_s: int, limpar_historico: bool 
         if "authentication" in erro.lower() or "sign in" in erro.lower():
             erro = f"{DICA_LOGIN} ({erro})"
         raise ErroAgy(erro)
+    # Nesses dois casos o agy sai com status SUCCESS e só avisa no stderr.
+    avisos = [linha.strip() for linha in stderr if linha.strip()]
+    if any("print timeout" in linha for linha in avisos):
+        raise ErroAgy(f"agy não respondeu em {timeout_s}s")
+    if not saida.get("response"):
+        # Ex.: o agente tentou rodar um comando, que o modo não interativo nega.
+        raise ErroAgy(f"agy terminou sem resposta: {(avisos or ['sem detalhes'])[-1][:300]}")
     return saida
 
 
 def extrair(
-    arquivo: Path,
+    imagens: list[Path],
     modelo: str = MODELO_PADRAO,
     timeout_s: int = 90,
     chave_qr: str | None = None,
     problemas: list[str] | None = None,
     limpar_historico: bool = False,
 ) -> dict:
-    """Extrai os campos de um documento fiscal com o agy.
+    """Extrai os campos de um documento (uma foto ou as páginas de um PDF) com o agy.
 
-    O arquivo é copiado para um diretório temporário que vira o único workspace
-    do agente, rodando em --mode plan (somente leitura).
+    As imagens são copiadas para um diretório temporário que vira o único
+    workspace do agente.
     """
     with tempfile.TemporaryDirectory(prefix="extrator-agy-") as tmp:
-        copia = Path(tmp) / f"documento{arquivo.suffix.lower()}"
-        shutil.copyfile(arquivo, copia)
+        copias = []
+        for i, imagem in enumerate(imagens, 1):
+            nome = f"documento-{i}" if len(imagens) > 1 else "documento"
+            copias.append(Path(tmp) / f"{nome}{imagem.suffix.lower()}")
+            shutil.copyfile(imagem, copias[-1])
 
-        prompt = PROMPT.format(arquivo=copia, categorias=", ".join(CATEGORIAS))
+        prompt = PROMPT.format(arquivos=", ".join(map(str, copias)), categorias=", ".join(CATEGORIAS))
         if chave_qr:
             prompt += DICA_QR.format(chave=chave_qr)
         if problemas:
             prompt += DICA_REVISAO.format(problemas="; ".join(problemas))
 
         saida = rodar_agy(
-            ["--print", prompt, "--add-dir", tmp, "--mode", "plan", "--model", modelo,
-             "--json-schema", json.dumps(NOTA)],
+            ["--print", prompt, "--add-dir", tmp, "--model", modelo, "--json-schema", json.dumps(NOTA)],
             cwd=tmp, timeout_s=timeout_s, limpar_historico=limpar_historico,
         )
 

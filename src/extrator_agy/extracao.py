@@ -1,9 +1,11 @@
 """Fluxo completo de extração de uma nota, compartilhado pela CLI e pela API."""
 
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .agy import DICA_LOGIN, MODELO_PADRAO, ErroAgy, extrair
+from .pdf import renderizar
 from .qr import ler_chave_qr
 from .schema import NOTA
 from .validacao import normalizar, validar
@@ -26,19 +28,19 @@ class Resultado:
     origem_chave: str = "foto"
 
 
-def _extrair_com_retentativa(arquivo: Path, config: Config, **kwargs) -> dict:
+def _extrair_com_retentativa(imagens: list[Path], config: Config, **kwargs) -> dict:
     kwargs |= {"modelo": config.modelo, "timeout_s": config.timeout_s, "limpar_historico": config.limpar_historico}
     try:
-        return extrair(arquivo, **kwargs)
+        return extrair(imagens, **kwargs)
     except ErroAgy as e:
         if str(e).startswith(DICA_LOGIN):
             raise
         # Chamadas do agy às vezes travam ou falham sem motivo; uma nova costuma passar.
-        return extrair(arquivo, **kwargs)
+        return extrair(imagens, **kwargs)
 
 
-def _ler(arquivo: Path, config: Config, chave_qr: str | None, problemas: list[str] | None = None):
-    dados = _extrair_com_retentativa(arquivo, config, chave_qr=chave_qr, problemas=problemas)
+def _ler(imagens: list[Path], config: Config, chave_qr: str | None, problemas: list[str] | None = None):
+    dados = _extrair_com_retentativa(imagens, config, chave_qr=chave_qr, problemas=problemas)
     if chave_qr:
         dados["chave_acesso"] = chave_qr
     dados = normalizar(dados)
@@ -46,22 +48,24 @@ def _ler(arquivo: Path, config: Config, chave_qr: str | None, problemas: list[st
 
 
 def processar(arquivo: Path, config: Config) -> Resultado:
-    """QR code → agy → validação → releitura se a validação falhar.
+    """PDF → imagens → QR code → agy → validação → releitura se a validação falhar.
 
-    Levanta ErroAgy se o agy falhar duas vezes seguidas.
+    Levanta ErroAgy se o agy falhar duas vezes seguidas e PdfInvalido se o PDF não abrir.
     """
-    chave_qr = ler_chave_qr(arquivo)
-    dados, problemas = _ler(arquivo, config, chave_qr)
-    origem = "QR" if chave_qr else "foto"
+    with tempfile.TemporaryDirectory(prefix="extrator-paginas-") as tmp:
+        imagens = renderizar(arquivo, Path(tmp)) if arquivo.suffix.lower() == ".pdf" else [arquivo]
+        chave_qr = next(filter(None, map(ler_chave_qr, imagens)), None)
+        dados, problemas = _ler(imagens, config, chave_qr)
+        origem = "QR" if chave_qr else "foto"
 
-    if problemas and config.revisar:
-        try:
-            novos, novos_problemas = _ler(arquivo, config, chave_qr, problemas)
-        except ErroAgy:
-            pass
-        else:
-            if len(novos_problemas) < len(problemas):
-                dados, problemas = novos, novos_problemas
-                origem += ", revisada"
+        if problemas and config.revisar:
+            try:
+                novos, novos_problemas = _ler(imagens, config, chave_qr, problemas)
+            except ErroAgy:
+                pass
+            else:
+                if len(novos_problemas) < len(problemas):
+                    dados, problemas = novos, novos_problemas
+                    origem += ", revisada"
 
     return Resultado({campo: dados.get(campo) for campo in CAMPOS}, problemas, origem)

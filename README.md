@@ -1,7 +1,8 @@
 # Extrator de notas - AGY
 
 Extrai os dados principais de notas e cupons fiscais brasileiros (fotos de cupom NFC-e,
-DANFE de NF-e, NFS-e e CF-e SAT, em imagem ou PDF) usando a [agy CLI](https://antigravity.google).
+DANFE de NF-e, NFS-e e CF-e SAT, em imagem ou PDF) e de recibos sem valor fiscal, como os de
+corrida da Uber e da 99, usando a [agy CLI](https://antigravity.google).
 Roda como API HTTP em Docker ou como linha de comando.
 
 Dados extraídos (do emitente):
@@ -13,15 +14,17 @@ Dados extraídos (do emitente):
   "uf": "SP",
   "municipio": "SAO PAULO",
   "numero_nota": "5340",
-  "data_emissao": "2026-06-06T13:11:33",
+  "data_emissao": "2026-06-06",
   "valor_total": 420.78,
   "chave_acesso": "35260675315333036480655120000053401048579176",
   "categoria_gasto": "mercado"
 }
 ```
 
-Campos que não aparecem ou estão ilegíveis vêm como `null`. Categorias possíveis estão em
-`src/extrator_agy/schema.py`.
+Campos que não aparecem ou estão ilegíveis vêm como `null`; recibos costumam vir sem
+`chave_acesso` e `numero_nota`. `data_emissao` é só a data (`AAAA-MM-DD`), sem hora.
+`chave_acesso` tem 44 dígitos (NF-e, NFC-e, CF-e SAT) ou 50 (NFS-e do padrão nacional).
+Categorias possíveis estão em `src/extrator_agy/schema.py`.
 
 ## Deploy com Docker
 
@@ -131,6 +134,7 @@ após `EXTRATOR_LOTE_TTL_MIN` ou num restart do container.
 | 401 | Token ausente ou errado |
 | 413 | Arquivo grande demais ou lote com arquivos demais |
 | 415 | Formato não suportado |
+| 422 | PDF ilegível ou protegido por senha |
 | 502 | O agy falhou duas vezes seguidas nessa nota |
 | 503 | O agy está sem login (rode o passo 3 do deploy) |
 
@@ -153,15 +157,25 @@ Grava `saida/<arquivo>.json`, um por nota. Notas que já têm JSON no formato at
 
 ## Como funciona
 
-1. **QR code** (`qr.py`): tenta ler o QR do cupom localmente. Quando consegue, a chave de
-   acesso vem exata dele, sem depender da leitura dos 44 dígitos impressos.
-2. **agy** (`agy.py`): o arquivo é copiado para um diretório temporário, que vira o único
-   workspace do agente, rodando em modo não interativo e somente leitura
-   (`--print --mode plan`) com `--json-schema` para fixar o formato da resposta.
-   Chamadas que falham ou passam do timeout são repetidas uma vez.
-3. **Validação** (`validacao.py`): confere o dígito verificador do CPF/CNPJ e da chave, e se
-   UF, ano/mês, CPF/CNPJ e número embutidos na chave batem com o que foi lido. Se algo falhar,
-   a nota é lida de novo uma vez, informando ao modelo os problemas encontrados.
+1. **PDF** (`pdf.py`): cada página vira um PNG (em PDFs com mais de 4, só as duas primeiras e
+   as duas últimas).
+   O agente não lê PDF direto: tenta rodar `pdftotext`, `python` etc., e o agy em modo não
+   interativo nega comandos e termina sem resposta. Imagem ele abre com `read_file`.
+2. **QR code** (`qr.py`): tenta ler o QR do cupom (na foto ou nas páginas do PDF) localmente.
+   Quando consegue, a chave de acesso vem exata dele, sem depender da leitura dos dígitos
+   impressos. Na NFS-e o QR é uma URL do portal nacional com a chave de 50 dígitos.
+3. **agy** (`agy.py`): as imagens são copiadas para um diretório temporário, que vira o único
+   workspace do agente, rodando em modo não interativo (`--print`) com `--json-schema` para
+   fixar o formato da resposta. No Docker, sem regras de permissão, o agy nega comandos e o
+   agente só consegue ler arquivos. Fora dele vale o `toolPermission` da sua configuração do agy
+   (com `always-proceed`, comandos rodam sem perguntar). Chamadas que falham, passam do timeout
+   ou terminam sem resposta são repetidas uma vez.
+4. **Validação** (`validacao.py`): deixa a data em `AAAA-MM-DD`, confere o dígito
+   verificador do CPF/CNPJ e da chave, e se UF, ano/mês, CPF/CNPJ e número embutidos na chave
+   batem com o que foi lido. Vale para a chave de 44 posições e para a de 50 da NFS-e nacional
+   (município IBGE, ambiente, tipo de inscrição, CPF/CNPJ, número com 13 dígitos, ano/mês,
+   código e DV, módulo 11 como na NF-e). Se algo falhar, a nota é lida de novo uma vez,
+   informando ao modelo os problemas encontrados.
 
 O fluxo fica em `extracao.py`, compartilhado pela API (`api.py`) e pela CLI (`cli.py`).
 

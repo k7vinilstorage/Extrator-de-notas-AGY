@@ -22,6 +22,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from . import __version__
 from .agy import DICA_LOGIN, MODELO_PADRAO, ErroAgy, rodar_agy
 from .extracao import Config, processar
+from .pdf import PdfInvalido
 
 EXTENSOES = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
 
@@ -111,6 +112,8 @@ async def extrair_nota(arquivo: UploadFile):
         except ErroAgy as e:
             codigo = 503 if str(e).startswith(DICA_LOGIN) else 502
             raise HTTPException(codigo, f"falha no agy: {e}") from None
+        except PdfInvalido as e:
+            raise HTTPException(422, f"{arquivo.filename}: {e}") from None
     return resposta(arquivo.filename or caminho.name, resultado)
 
 
