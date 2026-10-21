@@ -12,6 +12,9 @@ import pypdfium2 as pdfium
 MAX_PAGINAS = 4
 # 150 dpi: os 44 dígitos da chave de um DANFE ficam legíveis e o QR decodifica.
 ESCALA = 150 / 72
+# Teto por página (A4 a 150 dpi tem 2,2 milhões): PDF pode ter página de metros de
+# lado, que a 150 dpi passaria de 1 GB de memória.
+MAX_PIXELS = 16_000_000
 
 
 class PdfInvalido(ValueError):
@@ -38,8 +41,11 @@ def renderizar(pdf: Path, destino: Path) -> list[Path]:
     try:
         paginas = []
         for i in paginas_usadas(len(documento)):
+            pagina = documento[i]
+            largura, altura = pagina.get_size()
+            escala = min(ESCALA, (MAX_PIXELS / max(largura * altura, 1)) ** 0.5)
             caminho = destino / f"pagina-{i + 1}.png"
-            documento[i].render(scale=ESCALA).to_pil().save(caminho)
+            pagina.render(scale=escala).to_pil().save(caminho)
             paginas.append(caminho)
     finally:
         documento.close()
