@@ -1,0 +1,16 @@
+services:
+  extrator:
+    build: .
+    image: extrator-agy
+    init: true
+    env_file: .env
+    environment:
+      TZ: ${TZ:-America/Sao_Paulo}
+    ports:
+      - "${EXTRATOR_PORTA:-8000}:8000"
+    volumes:
+      - agy-login:/home/app
+    restart: unless-stopped
+
+volumes:
+  agy-login:

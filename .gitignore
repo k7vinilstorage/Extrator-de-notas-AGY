@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+dist/
+
+# Dados pessoais: cupons e resultados não vão para o repositório
+notas/
+saida/
+
+# Segredos da API
+.env
