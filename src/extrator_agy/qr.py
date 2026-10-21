@@ -6,7 +6,7 @@ from pathlib import Path
 import zxingcpp
 from PIL import Image, ImageOps
 
-from .validacao import dv_chave
+from .validacao import chave_valida
 
 
 def _decodificar(imagem: Image.Image) -> list[str]:
@@ -18,9 +18,7 @@ def _decodificar(imagem: Image.Image) -> list[str]:
 
 
 def ler_chave_qr(arquivo: Path) -> str | None:
-    """Retorna a chave de acesso do QR code da foto, ou None se não conseguir ler."""
-    if arquivo.suffix.lower() == ".pdf":
-        return None
+    """Retorna a chave de acesso do QR code da imagem, ou None se não conseguir ler."""
     try:
         imagem = ImageOps.exif_transpose(Image.open(arquivo))
     except OSError:
@@ -32,8 +30,10 @@ def ler_chave_qr(arquivo: Path) -> str | None:
         cinza = ImageOps.grayscale(imagem)
         textos = _decodificar(cinza.resize((cinza.width * 2, cinza.height * 2)))
 
+    # Só sequências de exatamente 44 dígitos (NFC-e, CF-e SAT) ou 50 (NFS-e, cujo QR é uma URL
+    # com a chave): os primeiros 44 dígitos de uma chave de NFS-e às vezes passam no DV.
     for texto in textos:
-        for chave in re.findall(r"\d{44}", texto):
-            if dv_chave(chave[:43]) == int(chave[43]):
+        for chave in re.findall(r"(?<!\d)(?:\d{50}|\d{44})(?!\d)", texto):
+            if chave_valida(chave):
                 return chave
     return None
