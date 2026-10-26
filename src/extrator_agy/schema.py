@@ -23,6 +23,13 @@ CATEGORIAS = [
 
 STR = {"type": ["string", "null"]}
 
+ITEM = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {"descricao": STR, "ncm": STR},
+    "required": ["descricao", "ncm"],
+}
+
 NOTA = {
     "type": "object",
     "additionalProperties": False,
@@ -36,6 +43,7 @@ NOTA = {
         "valor_total": {"type": ["number", "null"]},
         "chave_acesso": STR,
         "categoria_gasto": {"type": "string", "enum": CATEGORIAS},
+        "itens": {"type": ["array", "null"], "items": ITEM},
     },
 }
 NOTA["required"] = list(NOTA["properties"])
