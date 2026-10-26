@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .agy import DICA_LOGIN, MODELO_PADRAO, ErroAgy, extrair
-from .pdf import renderizar
+from .pdf import renderizar, texto
 from .qr import ler_chave_qr
 from .schema import NOTA
 from .validacao import normalizar, validar
@@ -39,28 +39,31 @@ def _extrair_com_retentativa(imagens: list[Path], config: Config, **kwargs) -> d
         return extrair(imagens, **kwargs)
 
 
-def _ler(imagens: list[Path], config: Config, chave_qr: str | None, problemas: list[str] | None = None):
+def _ler(imagens: list[Path], config: Config, chave_qr: str | None, texto_pdf: str | None,
+         problemas: list[str] | None = None):
     dados = _extrair_com_retentativa(imagens, config, chave_qr=chave_qr, problemas=problemas)
     if chave_qr:
         dados["chave_acesso"] = chave_qr
     dados = normalizar(dados)
-    return dados, validar(dados)
+    return dados, validar(dados, texto=texto_pdf)
 
 
 def processar(arquivo: Path, config: Config) -> Resultado:
-    """PDF → imagens → QR code → agy → validação → releitura se a validação falhar.
+    """PDF → imagens e texto → QR code → agy → validação → releitura se a validação falhar.
 
     Levanta ErroAgy se o agy falhar duas vezes seguidas e PdfInvalido se o PDF não abrir.
     """
     with tempfile.TemporaryDirectory(prefix="extrator-paginas-") as tmp:
-        imagens = renderizar(arquivo, Path(tmp)) if arquivo.suffix.lower() == ".pdf" else [arquivo]
+        e_pdf = arquivo.suffix.lower() == ".pdf"
+        imagens = renderizar(arquivo, Path(tmp)) if e_pdf else [arquivo]
+        texto_pdf = texto(arquivo) if e_pdf else None
         chave_qr = next(filter(None, map(ler_chave_qr, imagens)), None)
-        dados, problemas = _ler(imagens, config, chave_qr)
+        dados, problemas = _ler(imagens, config, chave_qr, texto_pdf)
         origem = "QR" if chave_qr else "foto"
 
         if problemas and config.revisar:
             try:
-                novos, novos_problemas = _ler(imagens, config, chave_qr, problemas)
+                novos, novos_problemas = _ler(imagens, config, chave_qr, texto_pdf, problemas)
             except ErroAgy:
                 pass
             else:

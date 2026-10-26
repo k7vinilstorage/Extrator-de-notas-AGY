@@ -16,6 +16,7 @@ NOTA = {
     "valor_total": 100.0,
     "chave_acesso": CHAVE,
     "categoria_gasto": "combustivel",
+    "itens": None,
 }
 
 # NFS-e do padrão nacional, pública no portal nfse.gov.br
@@ -31,6 +32,23 @@ NFSE = {
     "valor_total": None,
     "chave_acesso": CHAVE_NFSE,
     "categoria_gasto": "servicos",
+    "itens": None,
+}
+
+# NF-e (modelo 55) real de combustível
+CHAVE_NFE = "33260931665558000110550120000433001005399770"
+
+NFE = {
+    "cpf_cnpj": "31.665.558/0001-10",
+    "razao_social": "AUTO POSTO JARDIM PRIMAVERA LTDA",
+    "uf": "RJ",
+    "municipio": "DUQUE DE CAXIAS",
+    "numero_nota": "43300",
+    "data_emissao": "2026-09-02",
+    "valor_total": 465.51,
+    "chave_acesso": CHAVE_NFE,
+    "categoria_gasto": "combustivel",
+    "itens": [{"descricao": "DIESEL B S10", "ncm": "27101921"}],
 }
 
 
@@ -132,3 +150,45 @@ def test_cnpj_cpf_e_chave():
     assert not cpf_valido("529.982.247-26")
     assert chave_valida(CHAVE) and not chave_valida(CHAVE[:-1] + "1")
     assert chave_valida(CHAVE_NFSE) and not chave_valida(CHAVE_NFSE[:44])
+    assert chave_valida(CHAVE_NFE) and not chave_valida(CHAVE_NFE[:-1] + "1")
+
+
+def test_nfe_valida():
+    assert decompor_chave(CHAVE)["modelo"] == "65"
+    assert decompor_chave(CHAVE_NFE) == {
+        "uf": "33", "aamm": "2609", "cpf_cnpj": "31665558000110", "modelo": "55", "numero": "000043300",
+    }
+    assert validar(NFE) == []
+
+
+def test_normalizar_ncm_e_itens():
+    n = normalizar({"itens": [{"descricao": " DIESEL B S10 ", "ncm": "2710.19.21"}]})
+    assert n["itens"] == [{"descricao": "DIESEL B S10", "ncm": "27101921"}]
+    assert normalizar({"itens": []})["itens"] is None
+    assert normalizar({"itens": None})["itens"] is None
+    assert normalizar({})["itens"] is None
+
+
+def test_ncm_com_7_digitos_acusa():
+    problemas = validar(NFE | {"itens": [{"descricao": "DIESEL B S10", "ncm": "1234567"}]})
+    assert any("NCM inválido (1234567) no item 1" in p for p in problemas)
+
+
+def test_nfe_sem_itens_acusa():
+    problemas = validar(NFE | {"itens": None})
+    assert "itens da NF-e não lidos" in problemas
+
+
+def test_nfce_sem_itens_nao_acusa():
+    assert validar(NOTA) == []
+
+
+def test_ncm_conferido_mesmo_sem_chave():
+    problemas = validar(NFE | {"chave_acesso": None, "itens": [{"descricao": "DIESEL", "ncm": "271019"}]})
+    assert problemas == ["NCM inválido (271019) no item 1"]
+
+
+def test_validacao_ncm_com_texto():
+    assert validar(NFE, texto="5 820101034 DIESEL B S10 111,72 27101921 061 5656 L 71,07") == []
+    problemas = validar(NFE, texto="DIESEL B S10 sem ncm")
+    assert any("NCM 27101921 do item 1 não aparece no texto do PDF" in p for p in problemas)

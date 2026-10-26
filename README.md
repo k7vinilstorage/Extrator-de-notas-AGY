@@ -17,13 +17,26 @@ Dados extraídos (do emitente):
   "data_emissao": "2026-06-06",
   "valor_total": 420.78,
   "chave_acesso": "35260675315333036480655120000053401048579176",
-  "categoria_gasto": "mercado"
+  "categoria_gasto": "mercado",
+  "itens": null
+}
+```
+
+Em DANFE de NF-e (exemplo de combustível):
+
+```json
+{
+  "itens": [
+    { "descricao": "DIESEL B S10", "ncm": "27101921" }
+  ]
 }
 ```
 
 Campos que não aparecem ou estão ilegíveis vêm como `null`; recibos costumam vir sem
 `chave_acesso` e `numero_nota`. `data_emissao` é só a data (`AAAA-MM-DD`), sem hora.
 `chave_acesso` tem 44 dígitos (NF-e, NFC-e, CF-e SAT) ou 50 (NFS-e do padrão nacional).
+`itens` traz os produtos (`descricao` e `ncm`, com 8 dígitos) de DANFE de NF-e (modelo 55); em
+qualquer outro documento (NFC-e, CF-e SAT, NFS-e, recibo) vem `null`.
 Categorias possíveis estão em `src/extrator_agy/schema.py`.
 
 ## Deploy com Docker
@@ -182,7 +195,7 @@ Grava `saida/<arquivo>.json`, um por nota. Notas que já têm JSON no formato at
 ## Como funciona
 
 1. **PDF** (`pdf.py`): cada página vira um PNG (em PDFs com mais de 4, só as duas primeiras e
-   as duas últimas).
+   as duas últimas). O texto do PDF, quando existe, é lido para conferir o NCM.
    O agente não lê PDF direto: tenta rodar `pdftotext`, `python` etc., e o agy em modo não
    interativo nega comandos e termina sem resposta. Imagem ele abre com `read_file`.
 2. **QR code** (`qr.py`): tenta ler o QR do cupom (na foto ou nas páginas do PDF) localmente.
@@ -198,8 +211,9 @@ Grava `saida/<arquivo>.json`, um por nota. Notas que já têm JSON no formato at
    verificador do CPF/CNPJ e da chave, e se UF, ano/mês, CPF/CNPJ e número embutidos na chave
    batem com o que foi lido. Vale para a chave de 44 posições e para a de 50 da NFS-e nacional
    (município IBGE, ambiente, tipo de inscrição, CPF/CNPJ, número com 13 dígitos, ano/mês,
-   código e DV, módulo 11 como na NF-e). Se algo falhar, a nota é lida de novo uma vez,
-   informando ao modelo os problemas encontrados.
+   código e DV, módulo 11 como na NF-e). Em NF-e, confere se há itens, se cada NCM tem 8 dígitos
+   e, quando o PDF tem camada de texto, se o NCM está impresso nele. Se algo falhar, a nota é lida
+   de novo uma vez, informando ao modelo os problemas encontrados.
 
 O fluxo fica em `extracao.py`, compartilhado pela API (`api.py`) e pela CLI (`cli.py`).
 

@@ -20,6 +20,8 @@ Leia {arquivos}: foto ou páginas de um comprovante de gasto no Brasil, seja not
 - numero_nota, data_emissao (só a data, sem hora: AAAA-MM-DD), valor_total (número, ponto decimal).
 - chave_acesso: os 44 dígitos (50 na NFS-e nacional), sem espaços.
 - categoria_gasto: {categorias}.
+- itens: só em DANFE de NF-e, cada produto de "Dados dos produtos/serviços" com descricao (o nome
+  como impresso, sem as observações abaixo dele) e ncm (Cód. NCM, 8 dígitos); null nos demais documentos.
 Use null para o que não aparecer ou estiver ilegível; não invente. Recibos costumam não ter chave
 nem número de nota. Só abra as imagens com read_file; não rode comandos.
 """
