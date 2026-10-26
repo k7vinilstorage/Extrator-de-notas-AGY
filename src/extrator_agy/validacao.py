@@ -125,12 +125,35 @@ def normalizar(dados: dict) -> dict:
         d["numero_nota"] = d["numero_nota"] or str(int(p["numero"]))
 
     d["cpf_cnpj"] = formatar_cpf_cnpj(d.get("cpf_cnpj"))
+
+    # Só em DANFE de NF-e; nos demais documentos (e lista vazia) fica null.
+    itens = d.get("itens") if isinstance(d.get("itens"), list) else []
+    d["itens"] = [
+        {"descricao": (i.get("descricao") or "").strip() or None, "ncm": digitos(str(i.get("ncm") or "")) or None}
+        for i in itens if isinstance(i, dict)
+    ] or None
     return d
 
 
-def validar(dados: dict) -> list[str]:
-    """Retorna a lista de problemas encontrados (vazia se estiver tudo certo)."""
+def problemas_itens(itens: list[dict] | None, texto: str | None = None) -> list[str]:
+    """NCM com 8 dígitos e, se o PDF tem camada de texto, impresso nele."""
     problemas = []
+    texto = re.sub(r"\s", "", texto or "")
+    for n, item in enumerate(itens or [], 1):
+        ncm = item.get("ncm")
+        if ncm and not re.fullmatch(r"\d{8}", ncm):
+            problemas.append(f"NCM inválido ({ncm}) no item {n}")
+        elif ncm and texto and ncm not in texto:
+            problemas.append(f"NCM {ncm} do item {n} não aparece no texto do PDF")
+    return problemas
+
+
+def validar(dados: dict, texto: str | None = None) -> list[str]:
+    """Retorna a lista de problemas encontrados (vazia se estiver tudo certo).
+
+    texto é a camada de texto do PDF, quando houver, para conferir o NCM dos itens.
+    """
+    problemas = problemas_itens(dados.get("itens"), texto)
     doc = alfanum(dados.get("cpf_cnpj"))
     if doc and not (cnpj_valido(doc) if len(doc) == 14 else cpf_valido(doc)):
         problemas.append(f"CPF/CNPJ inválido ({dados['cpf_cnpj']})")
@@ -161,5 +184,8 @@ def validar(dados: dict) -> list[str]:
     uf = dados.get("uf")
     if uf and UF_POR_CODIGO.get(p["uf"]) not in (None, uf.upper()):
         problemas.append(f"UF ({uf}) difere da UF da chave ({UF_POR_CODIGO[p['uf']]})")
+
+    if p["modelo"] == "55" and not dados.get("itens"):
+        problemas.append("itens da NF-e não lidos")
 
     return problemas
