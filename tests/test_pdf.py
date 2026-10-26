@@ -1,7 +1,9 @@
+from pathlib import Path
+
 import pytest
 from PIL import Image
 
-from extrator_agy.pdf import MAX_PIXELS, PdfInvalido, paginas_usadas, renderizar
+from extrator_agy.pdf import MAX_PIXELS, PdfInvalido, paginas_usadas, renderizar, texto
 
 
 def criar_pdf(caminho, paginas):
@@ -36,3 +38,21 @@ def test_pagina_gigante_respeita_o_teto_de_pixels(tmp_path):
     Image.new("RGB", (300, 400), "white").save(pdf, resolution=1.0)
     imagem = Image.open(renderizar(pdf, tmp_path)[0])
     assert imagem.width * imagem.height <= MAX_PIXELS * 1.01  # o pdfium arredonda os lados para cima
+
+
+def test_texto_pdf_gerado(tmp_path):
+    pdf = criar_pdf(tmp_path / "gerado.pdf", 2)
+    assert texto(pdf).strip() == ""  # PDF de imagem, sem camada de texto
+    quebrado = tmp_path / "quebrado.pdf"
+    quebrado.write_bytes(b"isto nao e um pdf")
+    assert texto(quebrado) == ""
+
+
+NOTA_REAL = Path(__file__).parents[1] / "notas" / "nova comb" / "DANFe-33260931665558000110550120000433001005399770 OK.pdf"
+
+
+@pytest.mark.skipif(not NOTA_REAL.exists(), reason="DANFE real não encontrado em notas/nova comb")
+def test_texto_pdf_real():
+    conteudo = texto(NOTA_REAL)
+    assert "27101921" in conteudo
+    assert "DIESEL B S10" in conteudo
