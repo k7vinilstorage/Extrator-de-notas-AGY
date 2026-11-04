@@ -303,3 +303,43 @@ def test_nacionalidade_pela_certidao_brasileira():
     r = montar(arquivos, texto())
     assert r["ficha"]["funcionario"]["nacionalidade"] == "BRASILEIRA"
     assert r["origens"]["funcionario.nacionalidade"][0]["deduzido"] is True
+
+
+def test_nacionalidade_no_masculino_nao_diverge():
+    arquivos = documentos_completos()
+    arquivos[0] = arq("ctps.pdf", doc("ctps_digital", "Maria Exemplo da Silva", cpf=CPF, nacionalidade="BRASILEIRO"))
+    r = montar(arquivos, texto())
+    assert r["ficha"]["funcionario"]["nacionalidade"] == "BRASILEIRA"
+    assert not any(a["campo"] == "funcionario.nacionalidade" for a in r["alertas"])
+
+
+def test_nacionalidade_estrangeira_no_masculino_e_feminino():
+    arquivos = documentos_completos()
+    arquivos[0] = arq("ctps.pdf", doc("ctps_digital", "Maria Exemplo da Silva", cpf=CPF, nacionalidade="ITALIANO"))
+    arquivos[2] = arq("certidao.jpg", doc("rg", "Maria Exemplo da Silva", nacionalidade="Italiana"))
+    r = montar(arquivos, texto())
+    assert not any(a["campo"] == "funcionario.nacionalidade" for a in r["alertas"])
+
+
+def test_cnpj_do_empregador():
+    contrato = doc("contrato_trabalho", "Maria Exemplo da Silva", empregador="Empresa Exemplo",
+                   empregador_cnpj="11222333000181")
+    r = montar(documentos_completos() + [arq("contrato.pdf", contrato)],
+               texto(contrato={"empregador_cnpj": "11.222.333/0001-81"}))
+    assert r["ficha"]["contrato"]["empregador_cnpj"] == "11.222.333/0001-81"
+    assert not any(a["campo"] == "contrato.empregador_cnpj" for a in r["alertas"])
+
+
+def test_documento_sem_nome_legivel_e_do_funcionario():
+    arquivos = documentos_completos() + [arq("ctps-fisica.jpg", doc("ctps_digital", None, numero="1234567",
+                                                                    serie="0050", uf="SC"))]
+    r = montar(arquivos, texto())
+    assert r["ficha"]["funcionario"]["ctps"]["serie"] == "0050"
+    assert next(d for d in r["documentos"] if d["arquivo"] == "ctps-fisica.jpg")["pessoas"] == ["titular"]
+    assert any(a.get("arquivo") == "ctps-fisica.jpg" and "sem nome legível" in a["mensagem"] for a in r["alertas"])
+
+
+def test_documento_sem_nome_de_dependente_pelo_cpf():
+    arquivos = documentos_completos() + [arq("cpf2.jpg", doc("cpf", None, cpf=CPF_FILHO))]
+    r = montar(arquivos, texto())
+    assert next(d for d in r["documentos"] if d["arquivo"] == "cpf2.jpg")["pessoas"] == ["dependente:1"]

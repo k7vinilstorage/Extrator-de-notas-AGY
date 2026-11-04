@@ -29,9 +29,10 @@ texto de onde ele saiu, copiada literalmente. Campo de que o texto não fala fic
 - Campos de sim ou não (vale_transporte, apto, primeiro_emprego e, nos dependentes, irrf e
   salario_familia): valor "sim" ou "não", conforme o texto afirma.
 - horario: separe entrada, saída, início e fim do intervalo, a duração do intervalo e os dias, como
-  escritos ("8h", "17:30", "1h", "segunda a sexta").
+  escritos ("8h", "17:30", "1h", "segunda a sexta"). Com mais de um horário (dias úteis e sábado,
+  por exemplo), entrada e saída são as dos dias úteis, e dias é a jornada completa como escrita.
 - experiencia: separe os dias e a prorrogação ("45 + 45" são 45 e 45).
-- departamento: o setor ou departamento; empregador: a empresa que contrata.
+- departamento: o setor ou departamento; empregador: a empresa que contrata; empregador_cnpj: o CNPJ dela.
 - tipo_contrato: experiência, prazo determinado ou indeterminado, como o texto disser; se ele falar em
   período de experiência, o tipo é experiência (com o mesmo trecho).
 - beneficios: um item por benefício citado (vale-alimentação, plano de saúde etc.), sem o vale-transporte.

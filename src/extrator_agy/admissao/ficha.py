@@ -80,7 +80,7 @@ TITULAR = {
 }
 
 CONTRATO = [
-    "empregador", "data_admissao", "cargo", "funcao", "cbo", "salario", "tipo_salario", "tipo_contrato",
+    "empregador", "empregador_cnpj", "data_admissao", "cargo", "funcao", "cbo", "salario", "tipo_salario", "tipo_contrato",
     "experiencia.dias", "experiencia.prorrogacao_dias", "data_termino",
     "horario.entrada", "horario.saida", "horario.intervalo_inicio", "horario.intervalo_fim",
     "horario.intervalo_minutos", "horario.dias", "escala", "jornada_semanal_horas", "local_trabalho",
@@ -88,7 +88,7 @@ CONTRATO = [
 ]
 # Campo do contrato → campo do documento de contrato (carta proposta, contrato de trabalho...).
 CONTRATO_DOCUMENTO = {
-    "empregador": "empregador", "data_admissao": "data_admissao", "cargo": "cargo", "funcao": "funcao", "cbo": "cbo", "salario": "salario",
+    "empregador": "empregador", "empregador_cnpj": "empregador_cnpj", "data_admissao": "data_admissao", "cargo": "cargo", "funcao": "funcao", "cbo": "cbo", "salario": "salario",
     "tipo_salario": "tipo_salario", "tipo_contrato": "tipo_contrato", "experiencia.dias": "experiencia_dias",
     "experiencia.prorrogacao_dias": "prorrogacao_dias", "data_termino": "data_termino",
     "horario.entrada": "horario_entrada", "horario.saida": "horario_saida",
@@ -148,7 +148,11 @@ def _chave(campo: str, valor) -> str:
         return regras.chave_nome(valor)
     if isinstance(valor, list):
         return "|".join(sorted(_chave(campo, v) for v in valor))
-    return re.sub(r"[^0-9A-Z]", "", regras.sem_acento(str(valor)).upper())
+    chave = re.sub(r"[^0-9A-Z]", "", regras.sem_acento(str(valor)).upper())
+    if campo.endswith("nacionalidade"):
+        # ITALIANO e ITALIANA são a mesma nacionalidade.
+        chave = re.sub(r"(OA|A|O)$", "", chave)
+    return chave
 
 
 def _mesmo_nome(a: str | None, b: str | None) -> bool:
@@ -301,6 +305,12 @@ def _identificar(fontes: list[dict], texto: dict | None, m: _Montagem) -> tuple[
         elif any(_nome_contido(d["nome"], c.get("nome")) for d in citados):
             # Enteado, por exemplo: a certidão não tem o funcionário, mas o texto o cita como dependente.
             novo_dependente(c.get("nome"), None, f)["fontes"].append(f)
+        elif not c.get("nome"):
+            # Nome ilegível (manuscrito, foto ruim): na admissão, o documento é quase sempre do
+            # funcionário. Valor que contradiga os outros documentos ainda aparece como divergência.
+            do_titular.append(f)
+            m.alerta("aviso", None, f"{ROTULOS[f['tipo']]} sem nome legível; atribuído ao funcionário, confirme",
+                     arquivo=f["arquivo"])
         else:
             f["pessoa"] = "nao_identificada"
             m.alerta("aviso", None, f"{ROTULOS[f['tipo']]} de uma pessoa que não é o funcionário nem um dependente "

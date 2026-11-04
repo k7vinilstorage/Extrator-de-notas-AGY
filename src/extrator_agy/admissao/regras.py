@@ -9,7 +9,7 @@ import re
 import unicodedata
 from datetime import date
 
-from ..validacao import _dv_pesos, cpf_valido, data_iso, digitos
+from ..validacao import _dv_pesos, cnpj_valido, cpf_valido, data_iso, digitos, formatar_cpf_cnpj
 
 UFS = {
     "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE",
@@ -346,6 +346,20 @@ def _pis(valor: str) -> tuple:
     return f"{d[:3]}.{d[3:8]}.{d[8:10]}-{d[10]}", None
 
 
+def _cnpj(valor: str) -> tuple:
+    if not cnpj_valido(valor):
+        return None, "CNPJ com dígito verificador inválido"
+    return formatar_cpf_cnpj(valor), None
+
+
+def _nacionalidade(valor: str) -> tuple:
+    """"BRASILEIRO", "brasileira", "Brasil" e "BRASILEIRO(A)" são a mesma nacionalidade."""
+    t = re.sub(r"\s+", " ", valor).strip().upper()
+    if re.fullmatch(r"BRASIL(EIR[OA](\(A\))?)?( NAT[OA])?", sem_acento(t)):
+        return "BRASILEIRA", None
+    return t, None
+
+
 def _cep(valor: str) -> tuple:
     d = digitos(valor)
     return (f"{d[:5]}-{d[5:]}", None) if len(d) == 8 else (None, "CEP sem 8 dígitos")
@@ -394,6 +408,8 @@ FORMATOS = {
     "maiusculo": lambda v: (_texto(v).upper(), None),
     "nome": lambda v: (_texto(v).upper(), None) if chave_nome(v) else (None, "nome ilegível"),
     "cpf": _cpf,
+    "cnpj": _cnpj,
+    "nacionalidade": _nacionalidade,
     "pis": _pis,
     "data": lambda v: _data(v, futura=False),
     "data_futura": lambda v: _data(v, futura=True),

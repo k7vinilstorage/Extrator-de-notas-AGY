@@ -41,7 +41,9 @@ o sexo pelo nome, nem a UF pelo município, por exemplo.
   ultima_serie_aprovada: no histórico, a última série ou ano com resultado aprovado, como impresso
   (por exemplo "3ª série").
 - contrato_trabalho: tipo_contrato só se o documento disser experiência, prazo determinado ou
-  indeterminado ("CLT" sozinho não diz o tipo); horário de entrada e saída como impressos.
+  indeterminado ("CLT" sozinho não diz o tipo). Com mais de um horário (dias úteis e sábado, por
+  exemplo), horario_entrada e horario_saida são os do horário dos dias úteis; dias_trabalho é a
+  jornada completa como impressa, com os dias e os horários de cada um.
 - aso: apto é "sim" se o resultado for apto, "não" se inapto.
 - declaracao_vale_transporte: opta é "sim" se a opção pelo vale estiver marcada, "não" se estiver
   marcado que não opta, e null se nenhuma estiver marcada.
