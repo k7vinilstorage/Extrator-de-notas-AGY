@@ -5,6 +5,11 @@ DANFE de NF-e, NFS-e e CF-e SAT, em imagem ou PDF) e de recibos sem valor fiscal
 corrida da Uber e da 99, usando a [agy CLI](https://antigravity.google).
 Roda como API HTTP em Docker ou como linha de comando.
 
+Também lê os documentos e as informações em texto da **admissão de um funcionário** (RG, CPF,
+CTPS digital, certidões, comprovantes...) e devolve uma ficha em JSON para revisão. Veja
+[`/admissoes`](#post-admissoes--get-admissoesid-documentos-de-uma-admissão) e
+[`docs/ADMISSAO.md`](docs/ADMISSAO.md).
+
 Dados extraídos (do emitente):
 
 ```json
@@ -83,6 +88,8 @@ Para atualizar o agy, reconstrua a imagem sem cache: `docker compose build --no-
 | `EXTRATOR_MAX_MB` | `20` | Tamanho máximo por arquivo |
 | `EXTRATOR_MAX_ARQUIVOS_LOTE` | `100` | Arquivos por lote |
 | `EXTRATOR_LOTE_TTL_MIN` | `60` | Minutos que um lote concluído fica disponível |
+| `EXTRATOR_MAX_ARQUIVOS_ADMISSAO` | `20` | Arquivos por admissão |
+| `EXTRATOR_ADMISSAO_TTL_MIN` | `30` | Minutos que uma admissão concluída fica disponível (tem dado pessoal) |
 | `EXTRATOR_LIMPAR_HISTORICO` | `1` | Apaga o histórico que o agy grava de cada conversa (~1 MB por nota) |
 | `EXTRATOR_FAXINA` | `1` na imagem | Faxina automática (veja [Faxina](#faxina)). Já vem ligada no Dockerfile |
 | `TZ` | `America/Sao_Paulo` | Fuso horário do container |
@@ -163,16 +170,43 @@ isso a resposta sai de um cache e é atualizada em segundo plano a cada minuto e
 consulta; `consultado_em` diz de quando é. Só a primeira chamada, ou uma depois de 15 min sem
 consulta bem-sucedida, espera o agy: use um timeout de cliente de ~2 min.
 
+### `POST /admissoes` + `GET /admissoes/{id}`: documentos de uma admissão
+
+Os documentos de **um** funcionário (imagens ou PDFs) e, no campo `texto`, as informações que
+chegam escritas (cargo, salário, horário...). Cada arquivo e o texto são lidos em paralelo; a
+resposta é a ficha, de onde veio cada campo e os alertas da validação. Nada é guardado em disco.
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" -F "arquivos=@rg.jpg" -F "arquivos=@ctps.pdf" \
+     -F "texto=Começa 10/11/2026, auxiliar administrativo, R\$ 2.500,00, 8h às 17h" \
+     http://localhost:8000/admissoes
+# {"id": "8c1e...", "total": 3, "url": "/admissoes/8c1e..."}
+
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/admissoes/8c1e...
+# {"status": "concluido", "resultado": "alerta", "documentos": [...], "ficha": {...},
+#  "origens": {...}, "alertas": [...]}
+
+curl -X DELETE -H "Authorization: Bearer $TOKEN" http://localhost:8000/admissoes/8c1e...
+```
+
+Quando dois documentos discordam (nome diferente no RG e na CTPS, por exemplo), o campo vem
+`null` e o alerta traz os candidatos: quem revisa decide. Apague a admissão com `DELETE` assim
+que guardar a ficha; senão ela some em `EXTRATOR_ADMISSAO_TTL_MIN`. `POST /admissao` faz o mesmo
+e espera o resultado (de 30 s a alguns minutos). Detalhes, campos e alertas em
+[`docs/ADMISSAO.md`](docs/ADMISSAO.md).
+
 ### Erros
 
 | Código | Quando |
 |---|---|
+| 400 | Admissão sem arquivo nem texto, ou `tipos` inválido |
 | 401 | Token ausente ou errado |
-| 413 | Arquivo grande demais ou lote com arquivos demais |
+| 404 | Lote ou admissão não encontrado (ou expirado) |
+| 413 | Arquivo grande demais, arquivos demais no lote ou na admissão, ou texto longo demais |
 | 415 | Formato não suportado |
 | 422 | PDF ilegível ou protegido por senha |
 | 502 | O agy falhou duas vezes seguidas nessa nota, ou não conseguiu consultar a cota |
-| 503 | O agy está sem login (rode o passo 3 do deploy) |
+| 503 | O agy está sem login (rode o passo 3 do deploy); numa admissão assíncrona, vira `status: erro` |
 | 504 | A consulta da cota não terminou a tempo |
 
 ## Linha de comando
