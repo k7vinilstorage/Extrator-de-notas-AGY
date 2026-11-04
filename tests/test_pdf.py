@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -58,11 +59,14 @@ def test_texto_pdf_gerado(tmp_path):
     assert texto(quebrado) == ""
 
 
-NOTA_REAL = Path(__file__).parents[1] / "notas" / "nova comb" / "DANFe-33260931665558000110550120000433001100000030 OK.pdf"
+# DANFEs reais ficam em notas/, fora do repositório: o teste não cita nenhum pelo nome
+# (o nome do arquivo tem a chave de acesso, que permite consultar a nota).
+DANFES = sorted(p for p in (Path(__file__).parents[1] / "notas").rglob("*.pdf") if "danfe" in p.name.lower())
 
 
-@pytest.mark.skipif(not NOTA_REAL.exists(), reason="DANFE real não encontrado em notas/nova comb")
-def test_texto_pdf_real():
-    conteudo = texto(NOTA_REAL)
-    assert "27101921" in conteudo
-    assert "DIESEL B S10" in conteudo
+@pytest.mark.skipif(not DANFES, reason="nenhum DANFE real em notas/")
+def test_texto_de_danfes_reais():
+    for n, pdf in enumerate(DANFES, 1):
+        conteudo = texto(pdf)
+        assert "DANFE" in conteudo.upper(), f"DANFE {n} sem camada de texto"
+        assert re.search(r"(?<!\d)\d{8}(?!\d)", conteudo), f"DANFE {n} sem nenhum código de 8 dígitos (NCM)"
