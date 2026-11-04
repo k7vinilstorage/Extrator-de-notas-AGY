@@ -172,8 +172,9 @@ consulta bem-sucedida, espera o agy: use um timeout de cliente de ~2 min.
 
 ### `POST /admissoes` + `GET /admissoes/{id}`: documentos de uma admissão
 
-Os documentos de **um** funcionário (imagens ou PDFs) e, no campo `texto`, as informações que
-chegam escritas (cargo, salário, horário...). Cada arquivo e o texto são lidos em paralelo; a
+Os documentos de **um** funcionário (imagens, PDFs e `.docx`, que entra como texto) e, no campo
+`texto`, as informações que chegam escritas (cargo, salário, horário...). Carta proposta,
+contrato, declaração de vale-transporte e ASO também preenchem o contrato. Cada arquivo e o texto são lidos em paralelo; a
 resposta é a ficha, de onde veio cada campo e os alertas da validação. Nada é guardado em disco.
 
 ```sh

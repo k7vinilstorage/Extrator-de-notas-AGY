@@ -36,15 +36,17 @@ def paginas_usadas(total: int) -> list[int]:
     return list(range(metade)) + list(range(total - metade, total))
 
 
-def texto(pdf: Path) -> str:
-    """Texto das páginas lidas, para conferir o NCM; vazio em PDF escaneado ou ilegível."""
+def texto(pdf: Path, indices: list[int] | None = None) -> str:
+    """Texto das páginas lidas (ou das de `indices`); vazio em PDF escaneado ou ilegível."""
     with _PDFIUM:
         try:
             documento = pdfium.PdfDocument(pdf)
         except pdfium.PdfiumError:
             return ""
         try:
-            return "\n".join(documento[i].get_textpage().get_text_range() for i in paginas_usadas(len(documento)))
+            total = len(documento)
+            escolhidas = paginas_usadas(total) if indices is None else [i for i in indices if 0 <= i < total]
+            return "\n".join(documento[i].get_textpage().get_text_range() for i in escolhidas)
         finally:
             documento.close()
 

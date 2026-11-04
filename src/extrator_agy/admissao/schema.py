@@ -49,13 +49,24 @@ CAMPOS_DOCUMENTO = {
     },
     "comprovante_escolaridade": {
         "instituicao": "maiusculo", "nivel": "texto", "curso": "maiusculo", "situacao": "texto",
-        "data_conclusao": "data",
+        "concluido": "sim_nao", "ultima_serie_aprovada": "texto", "data_conclusao": "data",
     },
     "comprovante_pis": {"pis": "pis"},
     "dados_bancarios": {
         "titular": "nome", "banco": "maiusculo", "agencia": "maiusculo", "conta": "maiusculo",
         "tipo_conta": "texto",
     },
+    # Carta proposta, contrato de trabalho ou de experiência, encaminhamento admissional, ficha de registro.
+    "contrato_trabalho": {
+        "empregador": "maiusculo", "cargo": "maiusculo", "funcao": "maiusculo", "cbo": "cbo",
+        "salario": "dinheiro", "tipo_salario": "tipo_salario", "data_admissao": "data_futura",
+        "tipo_contrato": "tipo_contrato", "experiencia_dias": "inteiro", "prorrogacao_dias": "inteiro",
+        "data_termino": "data_futura", "horario_entrada": "hora", "horario_saida": "hora",
+        "intervalo_minutos": "duracao", "dias_trabalho": "texto", "escala": "escala",
+        "jornada_semanal_horas": "numero", "local_trabalho": "maiusculo", "beneficios": "texto",
+    },
+    "declaracao_vale_transporte": {"opta": "sim_nao"},
+    "aso": {"tipo_exame": "texto", "data_exame": "data", "apto": "sim_nao"},
 }
 
 TIPOS = [*CAMPOS_DOCUMENTO, "outro"]
@@ -64,14 +75,18 @@ DESCRICAO_TIPOS = {
     "rg": "RG estadual ou CIN (Carteira de Identidade Nacional)",
     "cnh": "CNH, física ou digital",
     "cpf": "cartão do CPF ou comprovante de situação cadastral",
-    "ctps_digital": "Carteira de Trabalho Digital",
+    "ctps_digital": "Carteira de Trabalho, digital ou física",
     "titulo_eleitor": "título de eleitor ou e-Título",
-    "comprovante_residencia": "conta de luz, água, telefone, internet, banco ou contrato de aluguel",
+    "comprovante_residencia": "qualquer conta, fatura ou boleto com o endereço da pessoa (luz, água, gás, "
+                              "telefone, internet, banco, cartão), contrato de aluguel ou declaração de residência",
     "certidao_nascimento": "certidão de nascimento",
     "certidao_casamento": "certidão de casamento",
     "comprovante_escolaridade": "diploma, certificado, histórico ou declaração escolar",
     "comprovante_pis": "Cartão Cidadão, extrato do PIS/FGTS ou CNIS",
     "dados_bancarios": "cartão, extrato ou comprovante de conta bancária",
+    "contrato_trabalho": "carta proposta, contrato de trabalho ou de experiência, encaminhamento admissional",
+    "declaracao_vale_transporte": "declaração de opção pelo vale-transporte",
+    "aso": "ASO, atestado de saúde ocupacional",
     "outro": "qualquer outro documento",
 }
 
@@ -87,6 +102,7 @@ def _objeto(propriedades: dict, anulavel: bool = False) -> dict:
 
 DOCUMENTO = _objeto({
     "tipo": {"type": "string", "enum": TIPOS},
+    "descricao": STR,
     "nome": STR,
     **{tipo: _objeto({campo: STR for campo in campos}, anulavel=True) for tipo, campos in CAMPOS_DOCUMENTO.items()},
 })
@@ -97,6 +113,10 @@ DOCUMENTOS = _objeto({"documentos": {"type": "array", "items": DOCUMENTO}})
 # funcionário declara e costuma não estar em documento.
 CAMPOS_TEXTO = {
     "funcionario.nome": "nome",
+    "funcionario.nome_social": "nome",
+    "funcionario.cpf": "cpf",
+    "funcionario.data_nascimento": "data",
+    "funcionario.rg.numero": "maiusculo",
     "funcionario.sexo": "sexo",
     "funcionario.estado_civil": "estado_civil",
     "funcionario.raca_cor": "raca_cor",
@@ -119,6 +139,7 @@ CAMPOS_TEXTO = {
     "funcionario.banco.conta": "maiusculo",
     "funcionario.banco.tipo_conta": "texto",
     "funcionario.banco.pix": "texto",
+    "contrato.empregador": "maiusculo",
     "contrato.data_admissao": "data_futura",
     "contrato.cargo": "maiusculo",
     "contrato.funcao": "maiusculo",

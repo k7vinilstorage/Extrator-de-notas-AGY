@@ -55,11 +55,16 @@ validação, ela passa com folga do minuto e meio que proxies e clientes HTTP co
 
 | Parte | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
-| `arquivos` | arquivo, repetido | sim* | Os documentos. Até `EXTRATOR_MAX_ARQUIVOS_ADMISSAO` (padrão 20) |
+| `arquivos` | arquivo, repetido | sim* | Os documentos (`.pdf`, `.jpg`, `.jpeg`, `.png`, `.webp`, e `.docx`, que entra como texto). Até `EXTRATOR_MAX_ARQUIVOS_ADMISSAO` (padrão 20) |
 | `texto` | texto livre | sim* | As informações escritas, como chegaram. Até 10 000 caracteres |
 | `tipos` | texto (JSON) | não | Lista na mesma ordem de `arquivos`, com o tipo de cada um ou `null`. Ex.: `["rg", null, "ctps_digital"]` |
 
 \* É preciso mandar ao menos um arquivo ou o texto.
+
+Um `.docx` (dados bancários, encaminhamento admissional) não é lido como imagem: o texto dele vai
+junto com o `texto`, depois de uma linha `--- conteúdo do arquivo "nome.docx" ---`, e o arquivo é
+apagado logo depois de lido. Na resposta, ele aparece no item `texto`, em `inclui`. O texto
+digitado vai até 10 000 caracteres; com os `.docx`, até 30 000.
 
 `tipos` é uma dica, para quando o painel já sabe o que é cada arquivo. Quando o agy discorda
 dela, sai um alerta.
@@ -87,11 +92,14 @@ seg a sex 8h às 17h com 1h de almoço, 45 dias de experiência + 45. Quer vale-
   "total": 6,
   "concluidos": 6,
   "documentos": [
-    { "arquivo": "rg-frente.jpg", "status": "ok", "tipos": ["rg"], "pessoas": ["titular"] },
-    { "arquivo": "ctps.pdf", "status": "ok", "tipos": ["ctps_digital"], "pessoas": ["titular"], "paginas_lidas": [1, 2, 3, 4] },
-    { "arquivo": "certidao-filho.jpg", "status": "ok", "tipos": ["certidao_nascimento"], "pessoas": ["dependente:1"] },
+    { "arquivo": "rg-frente.jpg", "status": "ok", "tipos": ["rg"], "descricoes": ["carteira de identidade, frente"],
+      "pessoas": ["titular"], "relido": true },
+    { "arquivo": "ctps.pdf", "status": "ok", "tipos": ["ctps_digital"], "descricoes": ["carteira de trabalho digital"],
+      "pessoas": ["titular"], "paginas_lidas": [1, 2, 3, 4] },
+    { "arquivo": "certidao-filho.jpg", "status": "ok", "tipos": ["certidao_nascimento"],
+      "descricoes": ["certidão de nascimento"], "pessoas": ["dependente:1"] },
     { "arquivo": "conta-luz.pdf", "status": "erro", "erro": "falha no agy: agy não respondeu em 90s" },
-    { "arquivo": "texto", "status": "ok" }
+    { "arquivo": "texto", "status": "ok", "inclui": ["conta bancaria.docx"] }
   ],
   "ficha": {
     "funcionario": { "nome": "MARIA EXEMPLO DA SILVA", "cpf": "123.456.789-09", "raca_cor": "parda", "...": "..." },
@@ -121,7 +129,9 @@ seg a sex 8h às 17h com 1h de almoço, 45 dias de experiência + 45. Quer vale-
   como em `/extrair`.
 - `pessoas` diz de quem são os documentos do arquivo: `titular`, `dependente:N` (a ordem em
   `ficha.dependentes`, a partir de 1) ou `nao_identificada`. É uma lista porque um arquivo pode
-  ter documentos de mais de uma pessoa.
+  ter documentos de mais de uma pessoa. `descricoes` diz o que é cada documento lido, na ordem
+  de `tipos`; `relido: true` marca o arquivo relido por divergência com outro documento; no item
+  `texto`, `inclui` lista os `.docx` cujo conteúdo foi junto.
 - `ficha` tem **só valores**. As origens ficam à parte, para o painel usar a ficha direto.
 - `origens` mapeia o caminho do campo para as fontes que o confirmaram. Para o texto, `trecho`
   é a parte do texto de onde o valor saiu, como o agy a citou, para quem revisa encontrar. Um
@@ -140,9 +150,10 @@ Os códigos existentes continuam valendo. Os novos casos:
 
 | Código | Quando |
 |---|---|
-| 400 | Nem arquivo nem texto; `tipos` não é JSON válido ou tem tamanho diferente de `arquivos` |
+| 400 | Nem arquivo nem texto (ou só `.docx` vazios); `tipos` não é JSON válido ou tem tamanho diferente de `arquivos` |
 | 404 | Admissão não encontrada, expirada ou apagada |
-| 413 | Mais de `EXTRATOR_MAX_ARQUIVOS_ADMISSAO` arquivos, um arquivo maior que `EXTRATOR_MAX_MB` ou texto com mais de 10 000 caracteres |
+| 413 | Mais de `EXTRATOR_MAX_ARQUIVOS_ADMISSAO` arquivos, um arquivo maior que `EXTRATOR_MAX_MB`, texto com mais de 10 000 caracteres ou texto e `.docx` somando mais de 30 000 |
+| 422 | `.docx` ilegível |
 | 415 | Formato não suportado |
 | 503 | agy sem login (só na rota síncrona) |
 
@@ -172,11 +183,13 @@ texto ────────────────────────�
                          ficha + origens → validação da ficha → alertas
 ```
 
-1. **Páginas.** Uma imagem é uma unidade. Um PDF tem as páginas renderizadas por `pdf.renderizar`.
-   Na admissão, porém, não dá para ler só as duas primeiras e as duas últimas, porque é comum
-   escanear vários documentos num PDF só. A proposta: ler até 8 páginas, mandando ao agy em
-   grupos de 4 por chamada, e dar um `aviso` se houver mais. Para isso, `renderizar` ganha um
-   parâmetro de quais páginas ler, com o comportamento atual como padrão.
+1. **Páginas e fotos.** Uma imagem é uma unidade. Foto com rotação gravada pelo celular (EXIF) é
+   endireitada, e foto acima de 6 MP é reduzida, antes de ir ao agy. Um PDF tem as páginas
+   renderizadas por `pdf.renderizar`. Na admissão, porém, não dá para ler só as duas primeiras e
+   as duas últimas, porque é comum escanear todos os documentos num PDF só: lê até 20 páginas,
+   mandando ao agy em grupos de 4 por chamada, e dá um `aviso` se houver mais. Quando o PDF tem
+   camada de texto (proposta, contrato, título digital), o texto das páginas vai junto, num `.txt`,
+   para o agy conferir letras e números.
 2. **Transcrição dos documentos.** Uma chamada do agy por arquivo (ou grupo de 4 páginas). O agy
    diz quais documentos aparecem nas imagens e transcreve cada um. Um arquivo pode conter vários
    documentos (RG e CPF na mesma foto), e um documento pode estar em vários arquivos (frente e
@@ -191,6 +204,12 @@ texto ────────────────────────�
 5. **Consolidação.** Separa o que é do titular e o que é de cada dependente, junta frente e
    verso, compara o mesmo campo entre fontes e roda a validação da ficha inteira (campos
    esperados, coerência entre datas).
+6. **Releitura do que divergiu.** Quando documentos divergem num campo de dígitos ou letras (CPF,
+   PIS, nascimento, filiação, RG, título, CEP, CTPS), cada arquivo envolvido é relido uma vez com o
+   aviso de quais campos conferir, sem o valor de nenhum dos lados, e a ficha é montada de novo.
+   No primeiro teste real, o RG foi lido com o ano de nascimento errado num dígito; a data era
+   válida e só a divergência com o CPF e o título mostrou o erro. O nome não é relido: nome
+   diferente costuma ser real (de casada, abreviado). O documento relido sai com `relido: true`.
 
 ### Identificação dos documentos
 
@@ -206,20 +225,28 @@ Tipos (`tipo`):
 | `rg` | RG estadual (modelos antigo e novo) e CIN (Carteira de Identidade Nacional) |
 | `cnh` | CNH física ou digital |
 | `cpf` | Cartão do CPF, comprovante de situação cadastral |
-| `ctps_digital` | Tela ou PDF da Carteira de Trabalho Digital |
+| `ctps_digital` | Carteira de Trabalho, digital (tela ou PDF) ou física (o nome do tipo ficou por compatibilidade) |
 | `titulo_eleitor` | Título físico ou e-Título |
-| `comprovante_residencia` | Conta de luz, água, telefone, internet, banco, contrato de aluguel |
+| `comprovante_residencia` | Qualquer conta, fatura ou boleto com o endereço; contrato de aluguel; declaração de residência |
 | `certidao_nascimento` | Certidão de nascimento (do titular ou de dependente) |
 | `certidao_casamento` | Certidão de casamento, com ou sem averbação |
 | `comprovante_escolaridade` | Diploma, certificado, histórico, declaração de matrícula |
 | `comprovante_pis` | Cartão Cidadão, extrato do PIS/FGTS, CNIS |
 | `dados_bancarios` | Cartão, extrato, comprovante de conta |
-| `outro` | Qualquer outra coisa (vira `aviso`; o conteúdo não é usado) |
+| `contrato_trabalho` | Carta proposta, contrato de trabalho ou de experiência, encaminhamento admissional: preenche o bloco `contrato` |
+| `declaracao_vale_transporte` | Declaração de opção pelo vale-transporte: preenche `contrato.vale_transporte` |
+| `aso` | Atestado de saúde ocupacional: preenche `contrato.aso` |
+| `outro` | Qualquer outra coisa (vira `aviso` com a descrição; o conteúdo não é usado) |
 
-**De quem é cada documento.** O titular é a pessoa da CTPS digital. Sem CTPS, é o nome que
-aparece no maior número de documentos de identificação (`rg`, `cnh`, `cpf`, `titulo_eleitor`).
-Se o texto citar o nome do funcionário, ele também serve para conferir. Os outros documentos se
-resolvem assim:
+Cada documento vem também com `descricao`, o que ele é em poucas palavras ("carteira de trabalho
+física, página de identificação", "foto 3x4, sem documento"), sem nomes nem números. Ela aparece
+em `documentos[].descricoes` e no aviso de documento não reconhecido.
+
+**De quem é cada documento.** O titular é o nome que aparece no maior número de documentos de
+identificação (`ctps_digital`, `rg`, `cnh`, `cpf`, `titulo_eleitor`), contando como o mesmo nome
+as abreviações ("MARIA E. DA SILVA" e "MARIA EXEMPLO DA SILVA") e nomes do meio omitidos. Em
+empate, vale o da CTPS. Sem documento de identificação, vale o nome citado no texto. Os outros
+documentos se resolvem assim:
 
 - certidão de nascimento cujo registrado é o titular → do titular;
 - certidão de nascimento com o titular como pai ou mãe → `dependente:N` (filho);
@@ -230,11 +257,15 @@ resolvem assim:
   dependente;
 - qualquer outro documento de outra pessoa → `aviso` "documento de pessoa não identificada",
   e o conteúdo fica fora da ficha;
-- comprovante de residência em nome de outra pessoa → continua sendo do titular, com `aviso`.
+- comprovante de residência em nome de outra pessoa → continua sendo do titular, com `aviso`;
+- comprovante de escolaridade, PIS, dados bancários, contrato, declaração de VT e ASO → do
+  titular (os quatro últimos com `aviso` se estiverem em nome de outra pessoa).
 
 Os nomes são comparados depois de normalizados: maiúsculas, sem acento, sem espaço duplo e sem
 partículas (`DE`, `DA`, `DO`, `DAS`, `DOS`, `E`). O nome normalizado só serve para comparar; a
-ficha leva o nome como impresso.
+ficha leva o nome como impresso. Quando o mesmo campo de nome vem abreviado num documento e por
+extenso em outro, não é divergência: a ficha leva o mais completo. No primeiro teste real, a CTPS
+física abreviava o nome do meio e todos os outros documentos eram descartados como de outra pessoa.
 
 **Fonte repetida ou divergente.** Para cada campo da mesma pessoa:
 
@@ -267,6 +298,7 @@ onde ele saiu. A conversão é feita no código:
 | `R$ 2.500,00`, `2500`, `2.500`, `2500,00`, `2500.00` | `dinheiro()` | `2500.0` |
 | `2,5 mil`, `dois mil e quinhentos`, `piso da categoria` | não converte | `null` + `invalido` com o original |
 | `10/11/2026`, `2026-11-10` | `validacao.data_iso` | `"2026-11-10"` |
+| `10 de novembro de 2026`, `10/NOV/2026`, `10 / 11 / 2026` | `regras` | `"2026-11-10"` |
 | `10/11`, `segunda que vem`, `dia 10` | não converte (falta o ano, ou é relativo) | `null` + `invalido` com o original |
 | `45 + 45`, `45 dias prorrogáveis por mais 45` | o agy separa em `dias` e `prorrogacao_dias` | `{dias: 45, prorrogacao_dias: 45}` |
 | `8h às 17h, 1h de almoço, seg a sex` | o agy separa entrada, saída, intervalo e dias | `{entrada: "08:00", saida: "17:00", ...}` |
@@ -303,14 +335,15 @@ quer exigir é uma das dúvidas.
 
 | Campo | Tipo | Origem (precedência) | Esperado | Validação e normalização |
 |---|---|---|---|---|
-| `nome` | `str?` | doc: ctps_digital > rg > cnh > cpf > certidao_nascimento | sim | Maiúsculas, espaços simples. Comparado normalizado entre fontes |
+| `nome` | `str?` | doc: ctps_digital > rg > cnh > cpf > certidao_nascimento | sim | Maiúsculas, espaços simples. Comparado normalizado entre fontes; abreviado e por extenso não divergem (fica o mais completo) |
+| `nome_social` | `str?` | texto | não | `null` quando repete o nome civil (formulários costumam repetir) |
 | `cpf` | `str?` | doc: cpf > ctps_digital > rg (CIN) > cnh | sim | DV (`validacao.cpf_valido`); formato `000.000.000-00`. Na CIN, o número do RG é o CPF: confere |
 | `pis` | `str?` | doc\|texto: comprovante_pis > ctps_digital | não | 11 dígitos, DV módulo 11 com pesos 3,2,9,8,7,6,5,4,3,2; formato `000.00000.00-0` |
 | `data_nascimento` | `str?` | doc: certidao_nascimento > rg > cnh > ctps_digital > cpf | sim | Data válida; idade na admissão entre 14 e 100 anos (`invalido` fora disso); de 14 a 15 anos só como aprendiz (`aviso`) |
 | `sexo` | `"M"\|"F"\|null` | doc\|texto: certidao_nascimento > rg (CIN) > ctps_digital | sim | Nunca deduzido do nome |
 | `nome_mae` | `str?` | doc: certidao_nascimento > rg > cnh > titulo_eleitor | não | Igual a `nome` |
 | `nome_pai` | `str?` | doc: igual a `nome_mae` | não | Igual a `nome` |
-| `nacionalidade` | `str?` | doc\|texto: rg > ctps_digital | sim | — |
+| `nacionalidade` | `str?` | doc\|texto: rg > ctps_digital; deduzida `"BRASILEIRA"` da certidão de nascimento brasileira | sim | — |
 | `pais_nascimento` | `str?` | doc\|texto: certidao_nascimento > rg | sim | — |
 | `municipio_nascimento` | `str?` | doc: certidao_nascimento > rg > cnh | não | Maiúsculas |
 | `uf_nascimento` | `str?` | doc: igual ao anterior | não | Uma das 27 UFs |
@@ -363,8 +396,11 @@ certidão". Se informar algo diferente do esperado, sai `divergente`.
 | `doutorado` | 12 | Doutorado completo |
 
 O agy transcreve o nível e a situação como impressos ou escritos (ex.: "Certificado de conclusão
-do Ensino Médio", "terminou o médio"). Uma tabela de palavras-chave no código converte para o
-enum. O que ela não reconhecer fica `null` com alerta, e um curso livre não define grau.
+do Ensino Médio", "terminou o médio"), diz se o documento declara a conclusão (`concluido`) e,
+num histórico, qual a última série aprovada. Uma tabela de palavras-chave no código converte para
+o enum: "aprovado" sozinho não é conclusão (aparece também em quem só passou de ano), mas a série
+final aprovada é (3ª do médio; 9º ano ou 8ª série do fundamental), com `aviso` de que o grau foi
+deduzido. O que não der para definir fica `null` com alerta, e um curso livre não define grau.
 
 Raça/cor (eSocial): `branca` 1, `preta` 2, `parda` 3, `amarela` 4, `indigena` 5,
 `nao_informado` 6. Estado civil (eSocial): `solteiro` 1, `casado` 2, `divorciado` 3,
@@ -388,12 +424,16 @@ parentesco) e com o `aviso` "dependente sem documento".
 
 ### `contrato`
 
-Tudo vem do texto, como escrito, sem códigos do Domínio: o cargo é o nome ("AUXILIAR
-ADMINISTRATIVO"), não o código. Quem traduz para o cadastro do Domínio é o painel. A lista
-segue os itens que a planilha do escritório diz que se preenchem no Domínio.
+Vem do texto e dos documentos de contrato (carta proposta, contrato de trabalho ou de experiência,
+encaminhamento admissional), da declaração de vale-transporte (`vale_transporte`) e do ASO
+(`aso`), como escrito, sem códigos do Domínio: o cargo é o nome ("AUXILIAR ADMINISTRATIVO"), não
+o código. Quem traduz para o cadastro do Domínio é o painel. Proposta e texto que discordam (de
+salário, de horário) viram `divergente`, como entre outros documentos. A lista segue os itens
+que a planilha do escritório diz que se preenchem no Domínio.
 
 | Campo | Tipo | Esperado | Validação |
 |---|---|---|---|
+| `empregador` | `str?` | não | Como escrito (nome comercial e razão social podem divergir) |
 | `data_admissao` | `str?` | sim | Data completa; de 30 dias atrás a 60 dias à frente (`aviso` fora disso); funcionário com ao menos 14 anos nela |
 | `cargo` | `str?` | sim | Maiúsculas |
 | `funcao` | `str?` | não | — |
@@ -538,7 +578,6 @@ mais um texto de exemplo. Ele gasta cota e leva cerca de 40 s, então só roda c
   trazem o código do eSocial para facilitar o mapeamento.
 - Ler o QR code da CIN, da CNH digital ou do e-Título com `qr.py`. Não sei se o conteúdo é
   legível (o da CNH digital é assinado); dá para investigar depois, com documentos reais.
-- Ler o ASO como documento (por enquanto, data e aptidão vêm do texto).
 - Subcomando na CLI (`extrator admissao pasta/ --texto info.txt`). É útil para testar com o agy
   local, mas não foi pedido.
 - Consultar CEP ou município em serviço externo (a faixa de CEP por UF é local).

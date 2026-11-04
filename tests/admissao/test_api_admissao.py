@@ -27,7 +27,7 @@ def lidos(monkeypatch):
     """Troca a leitura (agy) por uma falsa, guiada pelo conteúdo do arquivo; anota as dicas de tipo."""
     dicas = []
 
-    def ler_arquivo(caminho, nome, config, dica_tipo=None):
+    def ler_arquivo(caminho, nome, config, dica_tipo=None, conferir=None):
         dicas.append(dica_tipo)
         conteudo = caminho.read_bytes()
         if conteudo == b"sem login":
@@ -160,3 +160,37 @@ def test_log_sem_dado_pessoal(cliente, caplog):
     assert "ValueError" in caplog.text
     for dado in ("MARIA", CPF, "maria.jpg"):
         assert dado not in caplog.text
+
+
+def test_docx_entra_como_texto(cliente, monkeypatch):
+    import zipfile, io
+    textos = []
+    monkeypatch.setattr(fluxo, "ler_texto", lambda texto, config: textos.append(texto) or normalizar_texto({}))
+    docx = io.BytesIO()
+    with zipfile.ZipFile(docx, "w") as z:
+        z.writestr("word/document.xml", "<w:p><w:r><w:t>Ag: 1234 Cc: 5678-9</w:t></w:r></w:p>")
+    r = cliente.post("/admissao", data={"texto": "cargo SDR"}, headers=AUTH,
+                     files=[("arquivos", ("rg.jpg", b"x")), ("arquivos", ("conta.docx", docx.getvalue()))])
+    assert r.status_code == 200
+    assert textos == ['cargo SDR\n\n--- conteúdo do arquivo "conta.docx" ---\nAg: 1234 Cc: 5678-9']
+    assert r.json()["documentos"][-1] == {"arquivo": "texto", "status": "ok", "inclui": ["conta.docx"]}
+    assert [d["arquivo"] for d in r.json()["documentos"]] == ["rg.jpg", "texto"]
+
+
+def test_docx_invalido(cliente):
+    r = cliente.post("/admissao", files=[("arquivos", ("conta.docx", b"nao e zip"))], headers=AUTH)
+    assert r.status_code == 422 and "conta.docx" in r.json()["detail"]
+
+
+def test_so_docx_vazio(cliente):
+    import zipfile, io
+    docx = io.BytesIO()
+    with zipfile.ZipFile(docx, "w") as z:
+        z.writestr("word/document.xml", "<w:p></w:p>")
+    r = cliente.post("/admissoes", files=[("arquivos", ("vazio.docx", docx.getvalue()))], headers=AUTH)
+    assert r.status_code == 400
+
+
+def test_docx_nao_vale_nas_notas(cliente):
+    r = cliente.post("/extrair", files={"arquivo": ("nota.docx", b"x")}, headers=AUTH)
+    assert r.status_code == 415

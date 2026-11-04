@@ -26,13 +26,16 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from . import __version__
 from .admissao import fluxo as admissao
 from .admissao.schema import TIPOS as TIPOS_DOCUMENTO
-from .admissao.texto import MAX_CARACTERES
+from .admissao.docx import DocxInvalido, texto_docx
+from .admissao.texto import MAX_CARACTERES, MAX_CARACTERES_TOTAL
 from .agy import DADOS_AGY, DICA_LOGIN, MODELO_PADRAO, ErroAgy, consultar_limites, rodar_agy
 from .extracao import Config, processar
 from .faxina import faxinar
 from .pdf import PdfInvalido
 
 EXTENSOES = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
+# Na admissão chegam também .docx (conta bancária, encaminhamento): viram texto.
+EXTENSOES_ADMISSAO = EXTENSOES | {".docx"}
 
 TOKEN = os.environ.get("EXTRATOR_API_TOKEN", "")
 CONFIG = Config(
@@ -98,11 +101,11 @@ def autenticar(credenciais: HTTPAuthorizationCredentials | None = Depends(bearer
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "token inválido", {"WWW-Authenticate": "Bearer"})
 
 
-async def salvar_upload(upload: UploadFile, destino: Path) -> Path:
+async def salvar_upload(upload: UploadFile, destino: Path, extensoes: set[str] = EXTENSOES) -> Path:
     """Grava o upload em destino/<nome seguro>, validando extensão e tamanho."""
     sufixo = Path(upload.filename or "").suffix.lower()
-    if sufixo not in EXTENSOES:
-        raise HTTPException(415, f"{upload.filename}: formato não suportado (use {', '.join(sorted(EXTENSOES))})")
+    if sufixo not in extensoes:
+        raise HTTPException(415, f"{upload.filename}: formato não suportado (use {', '.join(sorted(extensoes))})")
     caminho = destino / f"{uuid.uuid4().hex}{sufixo}"
     tamanho = 0
     with caminho.open("wb") as f:
@@ -301,7 +304,8 @@ def consultar_lote(id_: str):
 
 # --- Admissão: documentos e texto de um funcionário → ficha com origens e alertas ---
 
-Arquivos = Annotated[list[UploadFile] | None, File(description="Documentos do funcionário (imagens ou PDFs)")]
+Arquivos = Annotated[list[UploadFile] | None,
+                     File(description="Documentos do funcionário (imagens ou PDFs; .docx entra como texto)")]
 Texto = Annotated[str | None, Form(description="Informações escritas: cargo, salário, horário etc.")]
 Tipos = Annotated[str | None, Form(description='JSON com o tipo de cada arquivo, na mesma ordem, ou null. Ex.: ["rg", null]')]
 
@@ -325,18 +329,37 @@ def _validar_admissao(arquivos: list[UploadFile], texto: str | None, tipos: str 
     return texto, dicas
 
 
-async def _receber_admissao(arquivos: list[UploadFile], dicas: list, destino: Path) -> list[tuple[Path, str, str | None]]:
-    entradas = []
+async def _receber_admissao(arquivos: list[UploadFile], dicas: list, texto: str | None,
+                            destino: Path) -> tuple[list[tuple[Path, str, str | None]], str | None, list[str]]:
+    """Grava os documentos e junta ao texto o conteúdo dos .docx (que são apagados em seguida).
+
+    Devolve as entradas das tarefas, o texto completo e os nomes dos .docx.
+    """
+    entradas, anexos = [], []
     for upload, dica in zip(arquivos, dicas):
-        caminho = await salvar_upload(upload, destino)
-        entradas.append((caminho, upload.filename or caminho.name, dica))
-    return entradas
+        caminho = await salvar_upload(upload, destino, EXTENSOES_ADMISSAO)
+        nome = upload.filename or caminho.name
+        if caminho.suffix == ".docx":
+            try:
+                anexos.append((nome, texto_docx(caminho)))
+            except DocxInvalido as e:
+                raise HTTPException(422, f"{nome}: {e}") from None
+            finally:
+                caminho.unlink(missing_ok=True)
+        else:
+            entradas.append((caminho, nome, dica))
+    texto = admissao.juntar_texto(texto, anexos)
+    if texto and len(texto) > MAX_CARACTERES_TOTAL:
+        raise HTTPException(413, f"texto e .docx somam mais de {MAX_CARACTERES_TOTAL} caracteres")
+    if not entradas and not texto:
+        raise HTTPException(400, "os arquivos enviados não têm conteúdo para ler")
+    return entradas, texto, [nome for nome, _ in anexos]
 
 
 def _finalizar_admissao(adm: dict):
     try:
         if adm["status"] == "processando":
-            adm |= admissao.concluir(adm["_resultados"], adm["_com_texto"])
+            adm |= admissao.concluir(adm["_resultados"], adm["_com_texto"], CONFIG)
             adm["status"] = "concluido"
     except Exception as e:  # registra na admissão para ela não ficar travada
         # Só o tipo do erro: a mensagem pode ter dado pessoal lido dos documentos.
@@ -384,12 +407,12 @@ async def criar_admissao(arquivos: Arquivos = None, texto: Texto = None, tipos: 
 
     diretorio = Path(tempfile.mkdtemp(prefix="extrator-admissao-"))
     try:
-        entradas = await _receber_admissao(arquivos, dicas, diretorio)
+        entradas, texto, anexos = await _receber_admissao(arquivos, dicas, texto, diretorio)
     except BaseException:
         shutil.rmtree(diretorio, ignore_errors=True)
         raise
 
-    lista = admissao.tarefas(entradas, texto, CONFIG)
+    lista = admissao.tarefas(entradas, texto, CONFIG, anexos)
     id_ = uuid.uuid4().hex
     adm = {
         "id": id_,
@@ -440,10 +463,12 @@ async def ler_admissao(arquivos: Arquivos = None, texto: Texto = None, tipos: Ti
     texto, dicas = _validar_admissao(arquivos, texto, tipos)
     agendar_faxina()
     with tempfile.TemporaryDirectory(prefix="extrator-admissao-") as tmp, em_uso(Path(tmp)):
-        entradas = await _receber_admissao(arquivos, dicas, Path(tmp))
-        lista = admissao.tarefas(entradas, texto, CONFIG)
+        entradas, texto, anexos = await _receber_admissao(arquivos, dicas, texto, Path(tmp))
+        lista = admissao.tarefas(entradas, texto, CONFIG, anexos)
         try:
             resultados = await asyncio.gather(*(asyncio.wrap_future(executor.submit(t)) for t in lista))
         except admissao.SemLogin as e:
             raise HTTPException(503, f"falha no agy: {e}") from None
-    return {"status": "concluido", **admissao.concluir(list(resultados), texto is not None)}
+        # Dentro do with: a releitura de documentos divergentes ainda usa os arquivos.
+        ficha = await asyncio.to_thread(admissao.concluir, list(resultados), texto is not None, CONFIG)
+    return {"status": "concluido", **ficha}
