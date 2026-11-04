@@ -20,7 +20,7 @@ from .agy import apagar_conversa
 CONVERSA_MAX_S = 60 * 60
 LOG_MAX_S = 7 * 24 * 60 * 60
 TMP_MAX_S = 2 * 60 * 60
-PREFIXOS_TMP = ("extrator-agy-", "extrator-paginas-", "extrator-lote-", "extrator-api-")
+PREFIXOS_TMP = ("extrator-agy-", "extrator-paginas-", "extrator-lote-", "extrator-api-", "extrator-admissao-")
 
 
 def _velhos(pasta: Path, idade_s: float, agora: float, padrao: str = "*") -> list[Path]:
