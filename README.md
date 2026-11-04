@@ -275,3 +275,8 @@ pessoal.
 ```sh
 uv run pytest
 ```
+
+O repositório é público: testes e exemplos usam só dados fictícios. Uma chave de acesso real
+permite consultar a nota na SEFAZ, com o destinatário, então nunca entra no repositório nem em
+nome de arquivo citado nos testes. Os testes que leem notas reais procuram os arquivos em
+`notas/` (fora do git) e são pulados quando ela não existe.
