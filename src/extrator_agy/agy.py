@@ -124,6 +124,40 @@ def rodar_agy(args: list[str], cwd: str, timeout_s: int, limpar_historico: bool 
     return saida
 
 
+def transcrever(
+    arquivos: list[Path],
+    prompt: str,
+    schema: dict,
+    modelo: str = MODELO_PADRAO,
+    timeout_s: int = 90,
+    limpar_historico: bool = False,
+    log_temporario: bool = False,
+) -> dict:
+    """Roda o agy sobre os arquivos e devolve o structured_output no formato do schema.
+
+    Os arquivos são copiados para um diretório temporário que vira o único
+    workspace do agente; `{arquivos}` no prompt vira a lista dos caminhos das cópias.
+    Com `log_temporario`, o log do agy (que pode conter o prompt) fica nesse
+    diretório e some com ele, em vez de ficar dias em log/.
+    """
+    with tempfile.TemporaryDirectory(prefix="extrator-agy-") as tmp:
+        copias = []
+        for i, arquivo in enumerate(arquivos, 1):
+            nome = f"documento-{i}" if len(arquivos) > 1 else "documento"
+            copias.append(Path(tmp) / f"{nome}{arquivo.suffix.lower()}")
+            shutil.copyfile(arquivo, copias[-1])
+
+        args = ["--print", prompt.replace("{arquivos}", ", ".join(map(str, copias))), "--add-dir", tmp,
+                "--model", modelo, "--json-schema", json.dumps(schema), "--disable-slash-commands"]
+        if log_temporario:
+            args += ["--log-file", f"{tmp}/agy.log"]
+        saida = rodar_agy(args, cwd=tmp, timeout_s=timeout_s, limpar_historico=limpar_historico)
+
+    if not isinstance(saida.get("structured_output"), dict):
+        raise ErroAgy("resposta do agy sem structured_output")
+    return saida["structured_output"]
+
+
 def extrair(
     imagens: list[Path],
     modelo: str = MODELO_PADRAO,
@@ -132,33 +166,13 @@ def extrair(
     problemas: list[str] | None = None,
     limpar_historico: bool = False,
 ) -> dict:
-    """Extrai os campos de um documento (uma foto ou as páginas de um PDF) com o agy.
-
-    As imagens são copiadas para um diretório temporário que vira o único
-    workspace do agente.
-    """
-    with tempfile.TemporaryDirectory(prefix="extrator-agy-") as tmp:
-        copias = []
-        for i, imagem in enumerate(imagens, 1):
-            nome = f"documento-{i}" if len(imagens) > 1 else "documento"
-            copias.append(Path(tmp) / f"{nome}{imagem.suffix.lower()}")
-            shutil.copyfile(imagem, copias[-1])
-
-        prompt = PROMPT.format(arquivos=", ".join(map(str, copias)), categorias=", ".join(CATEGORIAS))
-        if chave_qr:
-            prompt += DICA_QR.format(chave=chave_qr)
-        if problemas:
-            prompt += DICA_REVISAO.format(problemas="; ".join(problemas))
-
-        saida = rodar_agy(
-            ["--print", prompt, "--add-dir", tmp, "--model", modelo, "--json-schema", json.dumps(NOTA),
-             "--disable-slash-commands"],
-            cwd=tmp, timeout_s=timeout_s, limpar_historico=limpar_historico,
-        )
-
-    if not isinstance(saida.get("structured_output"), dict):
-        raise ErroAgy("resposta do agy sem structured_output")
-    return saida["structured_output"]
+    """Extrai os campos de uma nota (uma foto ou as páginas de um PDF) com o agy."""
+    prompt = PROMPT.format(arquivos="{arquivos}", categorias=", ".join(CATEGORIAS))
+    if chave_qr:
+        prompt += DICA_QR.format(chave=chave_qr)
+    if problemas:
+        prompt += DICA_REVISAO.format(problemas="; ".join(problemas))
+    return transcrever(imagens, prompt, NOTA, modelo=modelo, timeout_s=timeout_s, limpar_historico=limpar_historico)
 
 
 # Cotas do grupo de modelos Gemini (Flash e Pro dividem as mesmas) no /usage do agy.

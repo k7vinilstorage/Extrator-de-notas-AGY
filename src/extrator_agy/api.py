@@ -5,6 +5,7 @@ Rodar com um único processo (os lotes ficam em memória):
 """
 
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -17,11 +18,15 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from . import __version__
+from .admissao import fluxo as admissao
+from .admissao.schema import TIPOS as TIPOS_DOCUMENTO
+from .admissao.texto import MAX_CARACTERES
 from .agy import DADOS_AGY, DICA_LOGIN, MODELO_PADRAO, ErroAgy, consultar_limites, rodar_agy
 from .extracao import Config, processar
 from .faxina import faxinar
@@ -40,15 +45,19 @@ PARALELO = int(os.environ.get("EXTRATOR_PARALELO", "4"))
 MAX_BYTES = int(os.environ.get("EXTRATOR_MAX_MB", "20")) * 1024 * 1024
 MAX_ARQUIVOS_LOTE = int(os.environ.get("EXTRATOR_MAX_ARQUIVOS_LOTE", "100"))
 LOTE_TTL_S = int(os.environ.get("EXTRATOR_LOTE_TTL_MIN", "60")) * 60
+MAX_ARQUIVOS_ADMISSAO = int(os.environ.get("EXTRATOR_MAX_ARQUIVOS_ADMISSAO", "20"))
+# Menor que o dos lotes: a ficha de admissão é cheia de dado pessoal.
+ADMISSAO_TTL_S = int(os.environ.get("EXTRATOR_ADMISSAO_TTL_MIN", "30")) * 60
 # Ligada só na imagem Docker: fora dela, os dados do agy são os do usuário.
 FAXINA = os.environ.get("EXTRATOR_FAXINA", "0") != "0"
 
 if not TOKEN:
     raise RuntimeError("defina EXTRATOR_API_TOKEN (ex.: openssl rand -hex 32)")
 
-# Fila única para /extrair e /lotes: limita quantos agy rodam ao mesmo tempo.
+# Fila única para /extrair, /lotes e as admissões: limita quantos agy rodam ao mesmo tempo.
 executor = ThreadPoolExecutor(max_workers=PARALELO, thread_name_prefix="agy")
 lotes: dict[str, dict] = {}
+admissoes: dict[str, dict] = {}
 trava = threading.Lock()
 # Pastas do /tmp com uploads que ainda vão ser lidos: a faxina não pode apagá-las.
 pastas_em_uso: set[Path] = set()
@@ -77,7 +86,8 @@ app = FastAPI(
     title="Extrator de notas - AGY",
     version=__version__,
     description="Extrai CPF/CNPJ, razão social, UF, município, número, data, valor, chave de acesso "
-                "e categoria de gasto de notas e cupons fiscais (fotos e PDFs) usando a agy CLI.",
+                "e categoria de gasto de notas e cupons fiscais (fotos e PDFs) usando a agy CLI. "
+                "Também lê os documentos e o texto da admissão de um funcionário (/admissoes).",
     lifespan=ao_ligar,
 )
 bearer = HTTPBearer(auto_error=False)
@@ -230,11 +240,15 @@ def _processar_item(lote: dict, i: int, caminho: Path):
                 shutil.rmtree(lote["_dir"], ignore_errors=True)
 
 
-def _limpar_lotes_antigos():
+def _expirar(registro: dict[str, dict], ttl_s: int):
     agora = time.time()
     with trava:
-        for id_ in [i for i, l in lotes.items() if l.get("concluido_em") and agora - l["concluido_em"] > LOTE_TTL_S]:
-            del lotes[id_]
+        for id_ in [i for i, r in registro.items() if r.get("concluido_em") and agora - r["concluido_em"] > ttl_s]:
+            del registro[id_]
+
+
+def _limpar_lotes_antigos():
+    _expirar(lotes, LOTE_TTL_S)
 
 
 def _publico(lote: dict) -> dict:
@@ -283,3 +297,153 @@ def consultar_lote(id_: str):
     if lote is None:
         raise HTTPException(404, "lote não encontrado (ou expirado)")
     return _publico(lote)
+
+
+# --- Admissão: documentos e texto de um funcionário → ficha com origens e alertas ---
+
+Arquivos = Annotated[list[UploadFile] | None, File(description="Documentos do funcionário (imagens ou PDFs)")]
+Texto = Annotated[str | None, Form(description="Informações escritas: cargo, salário, horário etc.")]
+Tipos = Annotated[str | None, Form(description='JSON com o tipo de cada arquivo, na mesma ordem, ou null. Ex.: ["rg", null]')]
+
+
+def _validar_admissao(arquivos: list[UploadFile], texto: str | None, tipos: str | None) -> tuple[str | None, list]:
+    texto = (texto or "").strip() or None
+    if not arquivos and not texto:
+        raise HTTPException(400, "envie ao menos um arquivo ou o texto")
+    if len(arquivos) > MAX_ARQUIVOS_ADMISSAO:
+        raise HTTPException(413, f"no máximo {MAX_ARQUIVOS_ADMISSAO} arquivos por admissão")
+    if texto and len(texto) > MAX_CARACTERES:
+        raise HTTPException(413, f"texto com mais de {MAX_CARACTERES} caracteres")
+    try:
+        dicas = json.loads(tipos) if tipos else [None] * len(arquivos)
+    except ValueError:
+        raise HTTPException(400, "tipos não é um JSON válido") from None
+    if not isinstance(dicas, list) or len(dicas) != len(arquivos):
+        raise HTTPException(400, "tipos deve ser uma lista com um item por arquivo")
+    if invalidos := [t for t in dicas if t is not None and t not in TIPOS_DOCUMENTO]:
+        raise HTTPException(400, f"tipos desconhecidos: {invalidos} (use {', '.join(TIPOS_DOCUMENTO)})")
+    return texto, dicas
+
+
+async def _receber_admissao(arquivos: list[UploadFile], dicas: list, destino: Path) -> list[tuple[Path, str, str | None]]:
+    entradas = []
+    for upload, dica in zip(arquivos, dicas):
+        caminho = await salvar_upload(upload, destino)
+        entradas.append((caminho, upload.filename or caminho.name, dica))
+    return entradas
+
+
+def _finalizar_admissao(adm: dict):
+    try:
+        if adm["status"] == "processando":
+            adm |= admissao.concluir(adm["_resultados"], adm["_com_texto"])
+            adm["status"] = "concluido"
+    except Exception as e:  # registra na admissão para ela não ficar travada
+        # Só o tipo do erro: a mensagem pode ter dado pessoal lido dos documentos.
+        log.error("admissão %s: erro ao montar a ficha (%s)", adm["id"], type(e).__name__)
+        adm |= {"status": "erro", "erro": "erro interno ao montar a ficha"}
+    finally:
+        adm["_resultados"] = None
+        adm["concluido_em"] = time.time()
+        with trava:
+            pastas_em_uso.discard(adm["_dir"])
+        shutil.rmtree(adm["_dir"], ignore_errors=True)
+
+
+def _rodar_tarefa_admissao(adm: dict, i: int, tarefa):
+    item = adm["documentos"][i]
+    if adm["status"] != "processando":  # parou por falta de login ou foi apagada
+        resultado = {"status": "erro", "erro": "admissão interrompida"}
+    else:
+        item["status"] = "processando"
+        try:
+            resultado = tarefa()
+        except admissao.SemLogin as e:
+            adm |= {"status": "erro", "erro": f"falha no agy: {e}"}
+            resultado = {"status": "erro", "erro": str(e)}
+        except Exception as e:
+            log.error("admissão %s: erro ao ler o item %d (%s)", adm["id"], i + 1, type(e).__name__)
+            resultado = {"status": "erro", "erro": "erro interno"}
+    resultado = {**resultado, "arquivo": item["arquivo"]}
+    adm["_resultados"][i] = resultado
+    item |= {k: resultado[k] for k in ("status", "erro") if k in resultado}
+    with trava:
+        adm["concluidos"] += 1
+        ultima = adm["concluidos"] == adm["total"]
+    if ultima:
+        _finalizar_admissao(adm)
+
+
+@app.post("/admissoes", status_code=202, dependencies=[Depends(autenticar)],
+          summary="Envia os documentos e o texto de um funcionário para ler em segundo plano")
+async def criar_admissao(arquivos: Arquivos = None, texto: Texto = None, tipos: Tipos = None):
+    arquivos = arquivos or []
+    texto, dicas = _validar_admissao(arquivos, texto, tipos)
+    _expirar(admissoes, ADMISSAO_TTL_S)
+    agendar_faxina()
+
+    diretorio = Path(tempfile.mkdtemp(prefix="extrator-admissao-"))
+    try:
+        entradas = await _receber_admissao(arquivos, dicas, diretorio)
+    except BaseException:
+        shutil.rmtree(diretorio, ignore_errors=True)
+        raise
+
+    lista = admissao.tarefas(entradas, texto, CONFIG)
+    id_ = uuid.uuid4().hex
+    adm = {
+        "id": id_,
+        "status": "processando",
+        "criado_em": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "total": len(lista),
+        "concluidos": 0,
+        "documentos": [{"arquivo": nome, "status": "pendente"} for _, nome, _ in entradas]
+                      + ([{"arquivo": "texto", "status": "pendente"}] if texto else []),
+        "_dir": diretorio,
+        "_resultados": [None] * len(lista),
+        "_com_texto": texto is not None,
+    }
+    with trava:
+        admissoes[id_] = adm
+        pastas_em_uso.add(diretorio)
+    for i, tarefa in enumerate(lista):
+        executor.submit(_rodar_tarefa_admissao, adm, i, tarefa)
+    return {"id": id_, "total": adm["total"], "url": f"/admissoes/{id_}"}
+
+
+@app.get("/admissoes/{id_}", dependencies=[Depends(autenticar)],
+         summary="Andamento e, quando concluída, ficha, origens e alertas de uma admissão")
+def consultar_admissao(id_: str):
+    _expirar(admissoes, ADMISSAO_TTL_S)
+    adm = admissoes.get(id_)
+    if adm is None:
+        raise HTTPException(404, "admissão não encontrada (ou expirada, ou apagada)")
+    return _publico(adm)
+
+
+@app.delete("/admissoes/{id_}", status_code=204, dependencies=[Depends(autenticar)],
+            summary="Apaga a admissão da memória (chame assim que tiver guardado a ficha)")
+def apagar_admissao(id_: str):
+    with trava:
+        adm = admissoes.pop(id_, None)
+    if adm is None:
+        raise HTTPException(404, "admissão não encontrada (ou expirada, ou apagada)")
+    if adm["status"] == "processando":
+        adm["status"] = "cancelado"  # as tarefas ainda na fila não chamam o agy
+    return Response(status_code=204)
+
+
+@app.post("/admissao", dependencies=[Depends(autenticar)],
+          summary="Lê os documentos e o texto de um funcionário e espera a ficha")
+async def ler_admissao(arquivos: Arquivos = None, texto: Texto = None, tipos: Tipos = None):
+    arquivos = arquivos or []
+    texto, dicas = _validar_admissao(arquivos, texto, tipos)
+    agendar_faxina()
+    with tempfile.TemporaryDirectory(prefix="extrator-admissao-") as tmp, em_uso(Path(tmp)):
+        entradas = await _receber_admissao(arquivos, dicas, Path(tmp))
+        lista = admissao.tarefas(entradas, texto, CONFIG)
+        try:
+            resultados = await asyncio.gather(*(asyncio.wrap_future(executor.submit(t)) for t in lista))
+        except admissao.SemLogin as e:
+            raise HTTPException(503, f"falha no agy: {e}") from None
+    return {"status": "concluido", **admissao.concluir(list(resultados), texto is not None)}

@@ -49,16 +49,33 @@ def texto(pdf: Path) -> str:
             documento.close()
 
 
-def renderizar(pdf: Path, destino: Path) -> list[Path]:
-    """Grava as páginas do PDF como PNG em destino e devolve os caminhos."""
+def _abrir(pdf: Path) -> pdfium.PdfDocument:
+    try:
+        return pdfium.PdfDocument(pdf)
+    except pdfium.PdfiumError as e:
+        raise PdfInvalido(f"PDF ilegível ou protegido por senha ({e})") from None
+
+
+def contar_paginas(pdf: Path) -> int:
     with _PDFIUM:
+        documento = _abrir(pdf)
         try:
-            documento = pdfium.PdfDocument(pdf)
-        except pdfium.PdfiumError as e:
-            raise PdfInvalido(f"PDF ilegível ou protegido por senha ({e})") from None
+            return len(documento)
+        finally:
+            documento.close()
+
+
+def renderizar(pdf: Path, destino: Path, indices: list[int] | None = None) -> list[Path]:
+    """Grava as páginas do PDF como PNG em destino e devolve os caminhos.
+
+    `indices` escolhe as páginas (a partir de 0); sem ele, as de `paginas_usadas`.
+    """
+    with _PDFIUM:
+        documento = _abrir(pdf)
         try:
             paginas = []
-            for i in paginas_usadas(len(documento)):
+            total = len(documento)
+            for i in paginas_usadas(total) if indices is None else [i for i in indices if 0 <= i < total]:
                 pagina = documento[i]
                 largura, altura = pagina.get_size()
                 escala = min(ESCALA, (MAX_PIXELS / max(largura * altura, 1)) ** 0.5)

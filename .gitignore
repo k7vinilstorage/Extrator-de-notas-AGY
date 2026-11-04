@@ -7,6 +7,8 @@ dist/
 # Dados pessoais: cupons e resultados não vão para o repositório
 notas/
 saida/
+# Documentos de admissão para testar à mão (os sintéticos ficam em tests/admissao/sinteticos)
+/admissao/
 
 # Segredos da API
 .env
