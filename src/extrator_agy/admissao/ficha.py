@@ -6,7 +6,6 @@ as origens comecem pela fonte mais confiável.
 """
 
 import re
-from collections import Counter
 from datetime import date
 
 from . import regras
@@ -16,12 +15,17 @@ ROTULOS = {
     "comprovante_residencia": "comprovante de residência", "certidao_nascimento": "certidão de nascimento",
     "certidao_casamento": "certidão de casamento", "comprovante_escolaridade": "comprovante de escolaridade",
     "comprovante_pis": "comprovante do PIS", "dados_bancarios": "dados bancários", "texto": "texto",
-    "deduzido": "certidão",
+    "deduzido": "certidão", "contrato_trabalho": "contrato ou proposta de trabalho",
+    "declaracao_vale_transporte": "declaração de vale-transporte", "outro": "documento não reconhecido",
+    "aso": "ASO",
 }
 
 IDENTIDADE = ("ctps_digital", "rg", "cnh", "cpf", "titulo_eleitor")
 # Documentos que, entregues na admissão, são do funcionário mesmo em nome de outra pessoa.
-DO_TITULAR = ("comprovante_residencia", "dados_bancarios", "comprovante_escolaridade", "comprovante_pis")
+DO_TITULAR = ("comprovante_residencia", "dados_bancarios", "comprovante_escolaridade", "comprovante_pis",
+              "contrato_trabalho", "declaracao_vale_transporte", "aso")
+# Destes, um nome que não é o do funcionário merece aviso (no comprovante de residência, o aviso é outro).
+AVISAR_OUTRO_NOME = ("contrato_trabalho", "declaracao_vale_transporte", "comprovante_escolaridade", "aso")
 
 
 def _de(tipo: str, *campos: str) -> list[tuple[str, str]]:
@@ -33,15 +37,18 @@ _FILIACAO = ["certidao_nascimento", "rg", "cnh", "titulo_eleitor", "ctps_digital
 # Caminho na ficha → [(tipo da fonte, campo)], em ordem de precedência.
 TITULAR = {
     "funcionario.nome": [(t, "nome") for t in ("ctps_digital", "rg", "cnh", "cpf", "certidao_nascimento", "titulo_eleitor")],
-    "funcionario.cpf": [(t, "cpf") for t in ("cpf", "ctps_digital", "rg", "cnh", "certidao_nascimento")],
+    "funcionario.nome_social": [("texto", "funcionario.nome_social")],
+    "funcionario.cpf": [(t, "cpf") for t in ("cpf", "ctps_digital", "rg", "cnh", "certidao_nascimento")]
+    + [("texto", "funcionario.cpf")],
     "funcionario.pis": [("comprovante_pis", "pis"), ("ctps_digital", "pis"), ("texto", "funcionario.pis")],
     "funcionario.data_nascimento": [(t, "data_nascimento") for t in
-                                    ("certidao_nascimento", "rg", "cnh", "ctps_digital", "cpf", "titulo_eleitor")],
+                                    ("certidao_nascimento", "rg", "cnh", "ctps_digital", "cpf", "titulo_eleitor")]
+    + [("texto", "funcionario.data_nascimento")],
     "funcionario.sexo": [(t, "sexo") for t in ("certidao_nascimento", "rg", "ctps_digital")] + [("texto", "funcionario.sexo")],
     "funcionario.nome_mae": [(t, "nome_mae") for t in _FILIACAO],
     "funcionario.nome_pai": [(t, "nome_pai") for t in _FILIACAO],
     "funcionario.nacionalidade": [("rg", "nacionalidade"), ("ctps_digital", "nacionalidade"),
-                                  ("texto", "funcionario.nacionalidade")],
+                                  ("texto", "funcionario.nacionalidade"), ("deduzido", "nacionalidade")],
     "funcionario.pais_nascimento": [("deduzido", "pais_nascimento"), ("texto", "funcionario.pais_nascimento")],
     "funcionario.municipio_nascimento": [("certidao_nascimento", "municipio_nascimento"), ("rg", "naturalidade"),
                                          ("cnh", "local_nascimento")],
@@ -53,7 +60,7 @@ TITULAR = {
     "funcionario.deficiencia": [("texto", "funcionario.deficiencia")],
     "funcionario.telefone": [("texto", "funcionario.telefone")],
     "funcionario.email": [("texto", "funcionario.email")],
-    "funcionario.rg.numero": [("rg", "numero"), ("cnh", "rg_numero")],
+    "funcionario.rg.numero": [("rg", "numero"), ("cnh", "rg_numero"), ("texto", "funcionario.rg.numero")],
     "funcionario.rg.orgao_emissor": [("rg", "orgao_emissor"), ("cnh", "rg_orgao_emissor")],
     "funcionario.rg.uf_emissor": [("rg", "uf_emissor"), ("cnh", "rg_uf")],
     "funcionario.rg.data_expedicao": [("rg", "data_expedicao")],
@@ -73,13 +80,28 @@ TITULAR = {
 }
 
 CONTRATO = [
-    "data_admissao", "cargo", "funcao", "cbo", "salario", "tipo_salario", "tipo_contrato",
+    "empregador", "data_admissao", "cargo", "funcao", "cbo", "salario", "tipo_salario", "tipo_contrato",
     "experiencia.dias", "experiencia.prorrogacao_dias", "data_termino",
     "horario.entrada", "horario.saida", "horario.intervalo_inicio", "horario.intervalo_fim",
     "horario.intervalo_minutos", "horario.dias", "escala", "jornada_semanal_horas", "local_trabalho",
     "departamento", "sindicato", "vale_transporte", "beneficios", "aso.data", "aso.apto", "primeiro_emprego",
 ]
-TITULAR |= {f"contrato.{c}": [("texto", f"contrato.{c}")] for c in CONTRATO}
+# Campo do contrato → campo do documento de contrato (carta proposta, contrato de trabalho...).
+CONTRATO_DOCUMENTO = {
+    "empregador": "empregador", "data_admissao": "data_admissao", "cargo": "cargo", "funcao": "funcao", "cbo": "cbo", "salario": "salario",
+    "tipo_salario": "tipo_salario", "tipo_contrato": "tipo_contrato", "experiencia.dias": "experiencia_dias",
+    "experiencia.prorrogacao_dias": "prorrogacao_dias", "data_termino": "data_termino",
+    "horario.entrada": "horario_entrada", "horario.saida": "horario_saida",
+    "horario.intervalo_minutos": "intervalo_minutos", "horario.dias": "dias_trabalho", "escala": "escala",
+    "jornada_semanal_horas": "jornada_semanal_horas", "local_trabalho": "local_trabalho", "beneficios": "beneficios",
+}
+TITULAR |= {
+    f"contrato.{c}": ([("contrato_trabalho", CONTRATO_DOCUMENTO[c])] if c in CONTRATO_DOCUMENTO else [])
+    + ([("declaracao_vale_transporte", "opta")] if c == "vale_transporte" else [])
+    + ([("aso", {"aso.data": "data_exame", "aso.apto": "apto"}[c])] if c.startswith("aso.") else [])
+    + [("texto", f"contrato.{c}")]
+    for c in CONTRATO
+}
 
 DEPENDENTE = {
     "nome": [(t, "nome") for t in ("certidao_nascimento", "rg", "cpf", "cnh", "conjuge")],
@@ -109,6 +131,16 @@ CONFIRMAR_DEDUZIDO = {"funcionario.estado_civil"}
 
 NOMES = ("nome", "nome_mae", "nome_pai", "titular", "conjuge_1", "conjuge_2")
 
+# Campos em que a divergência entre documentos costuma ser erro de leitura de um dígito ou
+# letra: os arquivos envolvidos são relidos uma vez antes de virar alerta.
+RELER_SE_DIVERGIR = {
+    "funcionario.cpf", "funcionario.pis", "funcionario.data_nascimento", "funcionario.nome_mae",
+    "funcionario.nome_pai", "funcionario.rg.numero", "funcionario.rg.data_expedicao",
+    "funcionario.titulo_eleitor.numero", "funcionario.endereco.cep", "funcionario.endereco.numero",
+    "funcionario.ctps.numero", "funcionario.ctps.serie",
+}
+RELER_DEPENDENTE = {"cpf", "data_nascimento"}
+
 
 def _chave(campo: str, valor) -> str:
     """Forma de comparar dois valores do mesmo campo: nomes sem acento e partículas; o resto, só letras e números."""
@@ -121,6 +153,14 @@ def _chave(campo: str, valor) -> str:
 
 def _mesmo_nome(a: str | None, b: str | None) -> bool:
     return bool(a and b) and regras.chave_nome(a) == regras.chave_nome(b)
+
+
+def _nomes_equivalentes(nomes: list[str]) -> str | None:
+    """O nome mais completo, se todos forem ele mesmo ou abreviações dele; senão None."""
+    completo = regras.nome_mais_completo(nomes)
+    if all(_mesmo_nome(n, completo) or regras.abreviacao(n, completo) for n in nomes):
+        return completo
+    return None
 
 
 def _nome_contido(curto: str | None, completo: str | None) -> bool:
@@ -165,6 +205,8 @@ class _Montagem:
     def __init__(self):
         self.alertas: list[dict] = []
         self.origens: dict[str, list[dict]] = {}
+        # Caminho divergente → [(fonte, campo no documento)], para a releitura.
+        self.divergencias: dict[str, list[tuple[dict, str]]] = {}
 
     def alerta(self, tipo: str, campo: str | None, mensagem: str, **extra) -> None:
         self.alertas.append({"campo": campo, "tipo": tipo, "mensagem": mensagem, **extra})
@@ -174,7 +216,14 @@ class _Montagem:
                       if f["tipo"] == tipo and f["campos"].get(campo) is not None]
         if not candidatos:
             return None
+        valor = candidatos[0][0]
+        if caminho.rsplit(".", 1)[-1] in NOMES and len({_chave(caminho, v) for v, _, _ in candidatos}) > 1:
+            # "MARIA E. DA SILVA" e "MARIA EXEMPLO DA SILVA" não divergem: um abrevia o outro.
+            valor = _nomes_equivalentes([v for v, _, _ in candidatos])
+            if valor:
+                candidatos = [(valor, f, c) for _, f, c in candidatos]
         if len({_chave(caminho, v) for v, _, _ in candidatos}) > 1:
+            self.divergencias[caminho] = [(f, c) for _, f, c in candidatos]
             rotulos = sorted({ROTULOS[f.get("tipo_original", f["tipo"])] for _, f, _ in candidatos})
             self.alerta("divergente", caminho, f"{caminho} difere entre as fontes ({', '.join(rotulos)})",
                         candidatos=[{"valor": v, **_ref(f, c)} for v, f, c in candidatos])
@@ -182,20 +231,27 @@ class _Montagem:
         self.origens[caminho] = [_ref(f, c) for _, f, c in candidatos]
         if caminho in CONFIRMAR_DEDUZIDO and all(f["tipo"] == "deduzido" for _, f, _ in candidatos):
             self.alerta("aviso", caminho, f"{caminho} deduzido da certidão; confirme com o funcionário")
-        return candidatos[0][0]
+        return valor
 
     def campos_com_alerta(self) -> set[str]:
         return {a["campo"] for a in self.alertas if a["campo"]}
 
 
 def _titular_nome(fontes: list[dict], texto: dict | None) -> str | None:
-    """O nome da CTPS digital; sem ela, o mais frequente nos documentos de identidade; por fim, o do texto."""
-    for tipos in (("ctps_digital",), IDENTIDADE):
-        nomes = Counter(regras.chave_nome(f["campos"]["nome"]) for f in fontes
-                        if f["tipo"] in tipos and f["campos"].get("nome"))
-        if nomes:
-            return nomes.most_common(1)[0][0]
-    return regras.chave_nome((texto or {}).get("campos", {}).get("funcionario.nome")) or None
+    """O nome do funcionário: o que mais aparece nos documentos de identidade, contando abreviações.
+
+    Empate fica com o da CTPS (é ela que diz quem está sendo admitido) e, depois, com o mais
+    completo. Sem documento de identidade, vale o nome citado no texto.
+    """
+    nomes = [(f["campos"]["nome"], f["tipo"]) for f in fontes if f["tipo"] in IDENTIDADE and f["campos"].get("nome")]
+    if not nomes:
+        return (texto or {}).get("campos", {}).get("funcionario.nome")
+
+    def peso(candidato: tuple[str, str]) -> tuple:
+        nome, tipo = candidato
+        apoio = sum(regras.mesma_pessoa(nome, outro) for outro, _ in nomes)
+        return apoio, tipo == "ctps_digital", len(regras.chave_nome(nome))
+    return max(nomes, key=peso)[0]
 
 
 def _identificar(fontes: list[dict], texto: dict | None, m: _Montagem) -> tuple[list[dict], list[dict]]:
@@ -214,11 +270,14 @@ def _identificar(fontes: list[dict], texto: dict | None, m: _Montagem) -> tuple[
     for f in fontes:
         c = f["campos"]
         if f["tipo"] == "outro":
-            m.alerta("aviso", None, "documento não reconhecido; o conteúdo não foi usado", arquivo=f["arquivo"])
-        elif f["tipo"] in DO_TITULAR or (titular and regras.chave_nome(c.get("nome")) == titular):
+            descricao = f" ({f['descricao']})" if f.get("descricao") else ""
+            m.alerta("aviso", None, f"documento não reconhecido{descricao}; o conteúdo não foi usado", arquivo=f["arquivo"])
+        elif f["tipo"] in DO_TITULAR or regras.mesma_pessoa(c.get("nome"), titular):
             do_titular.append(f)
-        elif f["tipo"] == "certidao_nascimento" and titular in (regras.chave_nome(c.get("nome_mae")),
-                                                                regras.chave_nome(c.get("nome_pai"))):
+            if f["tipo"] in AVISAR_OUTRO_NOME and c.get("nome") and titular and not regras.mesma_pessoa(c["nome"], titular):
+                m.alerta("aviso", None, f"{ROTULOS[f['tipo']]} em nome de outra pessoa", arquivo=f["arquivo"])
+        elif f["tipo"] == "certidao_nascimento" and (regras.mesma_pessoa(c.get("nome_mae"), titular)
+                                                     or regras.mesma_pessoa(c.get("nome_pai"), titular)):
             novo_dependente(c.get("nome"), "filho", f)["fontes"].append(f)
         elif f["tipo"] == "certidao_casamento":
             _casamento(f, titular, do_titular, novo_dependente, m)
@@ -227,13 +286,15 @@ def _identificar(fontes: list[dict], texto: dict | None, m: _Montagem) -> tuple[
 
     # Nome diferente (de solteira, por exemplo) mas mesmo CPF, ou mesmos nascimento e mãe: é o titular.
     cpfs = {f["campos"].get("cpf") for f in do_titular} - {None}
-    nascimentos = {(f["campos"].get("data_nascimento"), regras.chave_nome(f["campos"].get("nome_mae")))
-                   for f in do_titular if f["campos"].get("data_nascimento") and f["campos"].get("nome_mae")}
+    nascimentos = [(f["campos"]["data_nascimento"], f["campos"]["nome_mae"])
+                   for f in do_titular if f["campos"].get("data_nascimento") and f["campos"].get("nome_mae")]
     for f in pendentes:
         c = f["campos"]
-        dependente = next((d for d in dependentes if _mesmo_nome(d["nome"], c.get("nome"))
+        dependente = next((d for d in dependentes if regras.mesma_pessoa(d["nome"], c.get("nome"))
                            or (c.get("cpf") and c["cpf"] in {g["campos"].get("cpf") for g in d["fontes"]})), None)
-        if c.get("cpf") in cpfs or (c.get("data_nascimento"), regras.chave_nome(c.get("nome_mae"))) in nascimentos:
+        mesmo_nascimento = any(c.get("data_nascimento") == nasc and regras.mesma_pessoa(c.get("nome_mae"), mae)
+                               for nasc, mae in nascimentos)
+        if c.get("cpf") in cpfs or mesmo_nascimento:
             do_titular.append(f)
         elif dependente:
             dependente["fontes"].append(f)
@@ -256,8 +317,7 @@ def _identificar(fontes: list[dict], texto: dict | None, m: _Montagem) -> tuple[
 def _casamento(f: dict, titular: str | None, do_titular: list, novo_dependente, m: _Montagem) -> None:
     c = f["campos"]
     for eu, outro in (("conjuge_1", "conjuge_2"), ("conjuge_2", "conjuge_1")):
-        nomes = {regras.chave_nome(c.get(eu)), regras.chave_nome(c.get(f"{eu}_nome_apos_casamento"))}
-        if titular and titular in nomes:
+        if any(regras.mesma_pessoa(c.get(k), titular) for k in (eu, f"{eu}_nome_apos_casamento")):
             do_titular.append(f)
             nome = c.get(f"{outro}_nome_apos_casamento") or c.get(outro)
             if nome:
@@ -287,6 +347,8 @@ def _deduzidos(do_titular: list[dict]) -> list[dict]:
             if "casament" not in anotacoes:
                 campos["estado_civil"] = "solteiro"
             campos["pais_nascimento"] = "BRASIL"
+            # Registro civil brasileiro: nasceu no Brasil, é brasileiro nato.
+            campos["nacionalidade"] = "BRASILEIRA"
         if f["tipo"] in ("rg", "cnh") and f["campos"].get("uf_naturalidade" if f["tipo"] == "rg" else "uf_nascimento"):
             campos["pais_nascimento"] = "BRASIL"
         if campos:
@@ -344,7 +406,7 @@ def _conferir_funcionario(ficha: dict, m: _Montagem) -> None:
         m.alerta("aviso", "funcionario.cnh.validade", "CNH vencida")
     if endereco.get("cep") and endereco.get("uf") and regras.uf_do_cep(endereco["cep"]) not in (None, endereco["uf"]):
         m.alerta("invalido", "funcionario.endereco.cep", "CEP não pertence à UF do endereço")
-    if endereco.get("titular") and func["nome"] and not _mesmo_nome(endereco["titular"], func["nome"]):
+    if endereco.get("titular") and func["nome"] and not regras.mesma_pessoa(endereco["titular"], func["nome"]):
         m.alerta("aviso", "funcionario.endereco.titular", "titular do comprovante de residência não é o funcionário")
     if endereco.get("data_referencia") and regras.dias_entre(endereco["data_referencia"], _hoje()) > 90:
         m.alerta("aviso", "funcionario.endereco.data_referencia", "comprovante de residência com mais de 90 dias")
@@ -445,6 +507,10 @@ def montar(arquivos: list[dict], texto: dict | None) -> dict:
         m.alerta("aviso", "funcionario.nome", "o nome citado no texto difere do nome nos documentos",
                  candidatos=[{"valor": nome_texto, **_ref(texto, "funcionario.nome")}])
 
+    if _mesmo_nome(ficha["funcionario"].get("nome_social"), ficha["funcionario"]["nome"]):
+        # Formulário que repete o nome civil no campo de nome social: não há nome social.
+        ficha["funcionario"]["nome_social"] = None
+        m.origens.pop("funcionario.nome_social", None)
     ficha["funcionario"] = _esvaziar(ficha["funcionario"])
     ficha["contrato"] = _esvaziar(ficha["contrato"])
     ficha["dependentes"] = _dependentes(dependentes, texto, ficha["funcionario"], m)
@@ -460,9 +526,30 @@ def montar(arquivos: list[dict], texto: dict | None) -> dict:
 
     resumo = []
     for a in arquivos:
-        item = {k: a[k] for k in ("arquivo", "status", "paginas_lidas", "erro") if k in a}
+        item = {k: a[k] for k in ("arquivo", "status", "paginas_lidas", "erro", "relido") if k in a}
         if a["status"] == "ok":
             item["tipos"] = [f["tipo"] for f in a["fontes"]]
+            item["descricoes"] = [f.get("descricao") for f in a["fontes"]]
             item["pessoas"] = list(dict.fromkeys(f.get("pessoa", "titular") for f in a["fontes"] if f["tipo"] != "outro"))
         resumo.append(item)
-    return {"documentos": resumo, "ficha": ficha, "origens": m.origens, "alertas": m.alertas}
+    return {"documentos": resumo, "ficha": ficha, "origens": m.origens, "alertas": m.alertas,
+            "_reler": _releituras(m.divergencias)}
+
+
+def _releituras(divergencias: dict[str, list[tuple[dict, str]]]) -> dict[str, list[str]]:
+    """Arquivo → campos a reler: os de dígitos e letras em que documentos divergiram.
+
+    Só o nome do campo vai para o agy, nunca o valor de um lado ou de outro.
+    """
+    pedidos: dict[str, list[str]] = {}
+    for caminho, envolvidos in divergencias.items():
+        campo = re.sub(r"^dependentes\[\d+\]\.", "", caminho)
+        if caminho not in RELER_SE_DIVERGIR and not (caminho.startswith("dependentes[") and campo in RELER_DEPENDENTE):
+            continue
+        for fonte, campo_documento in envolvidos:
+            if fonte["tipo"] in ROTULOS and fonte["tipo"] not in ("texto", "deduzido"):
+                descricao = f"{campo_documento} ({ROTULOS[fonte['tipo']]})"
+                pedidos.setdefault(fonte["arquivo"], [])
+                if descricao not in pedidos[fonte["arquivo"]]:
+                    pedidos[fonte["arquivo"]].append(descricao)
+    return pedidos

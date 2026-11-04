@@ -146,3 +146,58 @@ def test_data_futura_aceita_o_futuro():
 def test_idade():
     assert regras.idade("2000-06-15", "2026-06-14") == 25
     assert regras.idade("2000-06-15", "2026-06-15") == 26
+
+
+@pytest.mark.parametrize("a,b,esperado", [
+    ("MARIA E. DA SILVA", "Maria Exemplo da Silva", True),
+    ("MARIA J SILVA", "MARIA JOSE SILVA", True),
+    ("MARIA SILVA", "MARIA JOSE SILVA", False),  # nome do meio omitido não é abreviação
+    ("M. JOSE SILVA", "MARIA JOSE SILVA", False),  # primeiro nome tem de estar por extenso
+    ("MARIA JOSE SILVA", "MARIA JOANA SILVA", False),
+])
+def test_abreviacao(a, b, esperado):
+    assert regras.abreviacao(a, b) is esperado
+
+
+@pytest.mark.parametrize("a,b,esperado", [
+    ("MARIA E. DA SILVA", "MARIA EXEMPLO DA SILVA", True),
+    ("MARIA SILVA", "MARIA JOSE DA SILVA", True),
+    ("ANA SILVA", "MARIA SILVA", False),
+    ("MARIA SILVA", "MARIA SOUZA", False),
+    ("MARIA JOSE SILVA", "MARIA SILVA JOSE", False),
+    (None, "MARIA SILVA", False),
+])
+def test_mesma_pessoa(a, b, esperado):
+    assert regras.mesma_pessoa(a, b) is esperado
+
+
+def test_nome_mais_completo():
+    assert regras.nome_mais_completo(["MARIA E. DA SILVA", "MARIA EXEMPLO DA SILVA"]) == "MARIA EXEMPLO DA SILVA"
+
+
+@pytest.mark.parametrize("texto,esperado", [
+    ("24 DE JUNHO DE 1998", "1998-06-24"), ("1º de maio de 2000", "2000-05-01"), ("24/JUN/1998", "1998-06-24"),
+    ("07 de Dezembro de 2026", "2026-12-07"), ("7 de março de 1985", "1985-03-07"),
+])
+def test_data_com_mes_por_extenso(texto, esperado):
+    assert regras.normalizar("data_futura", texto) == (esperado, None)
+
+
+def test_data_com_mes_desconhecido():
+    assert regras.normalizar("data", "24 de junhoo de 1998")[0] is None
+
+
+@pytest.mark.parametrize("texto", ["Feminina", "FEMININO", "F"])
+def test_sexo_feminino(texto):
+    assert regras.normalizar("sexo", texto) == ("F", None)
+
+
+def test_mesma_pessoa_com_particula_abreviada():
+    assert regras.mesma_pessoa("MARIA E. D. SILVA", "MARIA EXEMPLO DA SILVA")
+    assert regras.mesma_pessoa("MARIA E. SILVA", "MARIA EXEMPLO SILVA")  # E. pode ser "EXEMPLO"
+
+
+@pytest.mark.parametrize("texto,uf", [("AMAZONAS", "AM"), ("São Paulo", "SP"), ("Estado do Rio de Janeiro", "RJ"),
+                                      ("mato grosso do sul", "MS"), ("Mato Grosso", "MT"), ("sc", "SC")])
+def test_uf_por_extenso(texto, uf):
+    assert regras.normalizar("uf", texto) == (uf, None)

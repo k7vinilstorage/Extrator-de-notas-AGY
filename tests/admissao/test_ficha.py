@@ -93,7 +93,8 @@ def test_origens():
 def test_resumo_dos_documentos():
     r = montar(documentos_completos() + [{"arquivo": "ruim.pdf", "status": "erro", "erro": "PDF ilegível"}], texto())
     docs = {d["arquivo"]: d for d in r["documentos"]}
-    assert docs["rg.jpg"] == {"arquivo": "rg.jpg", "status": "ok", "tipos": ["rg"], "pessoas": ["titular"]}
+    assert docs["rg.jpg"] == {"arquivo": "rg.jpg", "status": "ok", "tipos": ["rg"], "descricoes": [None],
+                              "pessoas": ["titular"]}
     assert docs["filho.jpg"]["pessoas"] == docs["cpf-filho.jpg"]["pessoas"] == ["dependente:1"]
     assert docs["ruim.pdf"] == {"arquivo": "ruim.pdf", "status": "erro", "erro": "PDF ilegível"}
     assert any(a["arquivo"] == "ruim.pdf" for a in r["alertas"])
@@ -220,3 +221,85 @@ def test_texto_e_documento_divergem_no_endereco():
     r = montar(documentos_completos(), texto(funcionario={"endereco": {"cep": "89202-000"}}))
     assert r["ficha"]["funcionario"]["endereco"]["cep"] is None
     assert ("funcionario.endereco.cep", "divergente") in tipos_de_alerta(r)
+
+
+def test_ctps_com_nome_abreviado():
+    # O caso do primeiro teste real: a CTPS abrevia o nome do meio e todos os outros documentos
+    # eram descartados como de "pessoa não identificada".
+    arquivos = documentos_completos()
+    arquivos[0] = arq("ctps.jpg", doc("ctps_digital", "MARIA E. DA SILVA", pis=pis(), numero="1234567", serie="0050"))
+    arquivos[1] = arq("rg.jpg", doc("rg", "Maria Exemplo da Silva", cpf=CPF, data_nascimento="05/03/1990",
+                                    nome_mae="Ana Exemplo"))
+    r = montar(arquivos, texto())
+    assert r["ficha"]["funcionario"]["nome"] == "MARIA EXEMPLO DA SILVA"
+    assert not any(a["campo"] == "funcionario.nome" for a in r["alertas"])
+    assert not any("não é o funcionário" in a["mensagem"] for a in r["alertas"])
+    assert {d["arquivo"]: d["pessoas"] for d in r["documentos"]}["rg.jpg"] == ["titular"]
+    assert r["ficha"]["funcionario"]["cpf"] == CPF and r["ficha"]["funcionario"]["pis"] == pis()
+
+
+def test_contrato_vem_dos_documentos():
+    contrato = doc("contrato_trabalho", "Maria Exemplo da Silva", empregador="Empresa Exemplo", cargo="AUXILIAR ADMINISTRATIVO",
+                   cbo="4110-05", salario="R$ 2.345,67", data_admissao=ADMISSAO, tipo_contrato="experiência",
+                   experiencia_dias="45", prorrogacao_dias="45", horario_entrada="08:00", horario_saida="17:00")
+    vt = doc("declaracao_vale_transporte", "Maria Exemplo da Silva", opta="sim")
+    r = montar(documentos_completos() + [arq("contrato.pdf", contrato), arq("vt.pdf", vt)],
+               texto(contrato={"cargo": None, "salario": None, "tipo_contrato": None, "horario": {}}))
+    c = r["ficha"]["contrato"]
+    assert (c["empregador"], c["cargo"], c["cbo"], c["salario"]) == ("EMPRESA EXEMPLO", "AUXILIAR ADMINISTRATIVO", "411005", 2345.67)
+    assert (c["tipo_contrato"], c["experiencia"]) == ("experiencia", {"dias": 45, "prorrogacao_dias": 45})
+    assert (c["horario"]["entrada"], c["horario"]["saida"], c["vale_transporte"]) == ("08:00", "17:00", True)
+    assert r["origens"]["contrato.cargo"] == [{"arquivo": "contrato.pdf", "tipo": "contrato_trabalho"}]
+    assert not [a for a in r["alertas"] if a["campo"] and a["campo"].startswith("contrato")]
+
+
+def test_proposta_e_texto_divergem_no_salario():
+    proposta = doc("contrato_trabalho", "Maria Exemplo da Silva", salario="R$ 2.345,67")
+    r = montar(documentos_completos() + [arq("proposta.pdf", proposta)], texto(contrato={"salario": "R$ 2.500,00"}))
+    assert r["ficha"]["contrato"]["salario"] is None
+    assert ("contrato.salario", "divergente") in tipos_de_alerta(r)
+
+
+def test_documento_nao_reconhecido_diz_o_que_e():
+    outro = normalizar_documento({"tipo": "outro", "descricao": "comprovante de vacinação", "nome": None})
+    r = montar(documentos_completos() + [arq("vacina.jpg", outro)], texto())
+    assert any(a["mensagem"] == "documento não reconhecido (comprovante de vacinação); o conteúdo não foi usado"
+               for a in r["alertas"])
+    assert next(d for d in r["documentos"] if d["arquivo"] == "vacina.jpg")["descricoes"] == ["comprovante de vacinação"]
+
+
+def test_divergencia_de_digito_pede_releitura():
+    arquivos = documentos_completos()
+    arquivos[1] = arq("rg.jpg", doc("rg", "MARIA EXEMPLO DA SILVA", cpf=CPF, data_nascimento="05/03/1993",
+                                    nome_mae="Ana Exemplo"))
+    r = montar(arquivos, texto())
+    assert ("funcionario.data_nascimento", "divergente") in tipos_de_alerta(r)
+    assert r["_reler"] == {"ctps.pdf": ["data_nascimento (CTPS digital)"], "rg.jpg": ["data_nascimento (RG)"],
+                           "certidao.jpg": ["data_nascimento (certidão de nascimento)"]}
+
+
+def test_nome_divergente_nao_pede_releitura():
+    arquivos = documentos_completos()
+    arquivos[1] = arq("rg.jpg", doc("rg", "Maria Exemplo", cpf=CPF, data_nascimento="05/03/1990"))
+    assert montar(arquivos, texto())["_reler"] == {}
+
+
+def test_aso_preenche_o_contrato():
+    aso = doc("aso", "Maria Exemplo da Silva", tipo_exame="admissional", data_exame="28/10/2026", apto="sim")
+    r = montar(documentos_completos() + [arq("aso.jpg", aso)], texto())
+    assert r["ficha"]["contrato"]["aso"] == {"data": "2026-10-28", "apto": True}
+
+
+def test_nome_social_igual_ao_civil_nao_conta():
+    r = montar(documentos_completos(), texto(funcionario={"nome_social": "Maria Exemplo da Silva"}))
+    assert r["ficha"]["funcionario"]["nome_social"] is None and "funcionario.nome_social" not in r["origens"]
+    r = montar(documentos_completos(), texto(funcionario={"nome_social": "Mário Silva"}))
+    assert r["ficha"]["funcionario"]["nome_social"] == "MÁRIO SILVA"
+
+
+def test_nacionalidade_pela_certidao_brasileira():
+    arquivos = documentos_completos()
+    arquivos[0] = arq("ctps.pdf", doc("ctps_digital", "Maria Exemplo da Silva", cpf=CPF))
+    r = montar(arquivos, texto())
+    assert r["ficha"]["funcionario"]["nacionalidade"] == "BRASILEIRA"
+    assert r["origens"]["funcionario.nacionalidade"][0]["deduzido"] is True

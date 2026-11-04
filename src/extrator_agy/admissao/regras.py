@@ -16,6 +16,15 @@ UFS = {
     "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO",
 }
 
+NOMES_UF = {
+    "ACRE": "AC", "ALAGOAS": "AL", "AMAZONAS": "AM", "AMAPA": "AP", "BAHIA": "BA", "CEARA": "CE",
+    "DISTRITO FEDERAL": "DF", "ESPIRITO SANTO": "ES", "GOIAS": "GO", "MARANHAO": "MA", "MINAS GERAIS": "MG",
+    "MATO GROSSO DO SUL": "MS", "MATO GROSSO": "MT", "PARA": "PA", "PARAIBA": "PB", "PERNAMBUCO": "PE",
+    "PIAUI": "PI", "PARANA": "PR", "RIO DE JANEIRO": "RJ", "RIO GRANDE DO NORTE": "RN", "RONDONIA": "RO",
+    "RORAIMA": "RR", "RIO GRANDE DO SUL": "RS", "SANTA CATARINA": "SC", "SERGIPE": "SE", "SAO PAULO": "SP",
+    "TOCANTINS": "TO",
+}
+
 # Código da UF nos dígitos 9 e 10 do título de eleitor (28 é o exterior).
 UF_TITULO = {
     "01": "SP", "02": "MG", "03": "RJ", "04": "RS", "05": "BA", "06": "PR", "07": "CE", "08": "PE",
@@ -56,9 +65,53 @@ def sem_acento(texto: str) -> str:
 
 
 def chave_nome(nome: str | None) -> str:
-    """O nome só para comparar: maiúsculas, sem acento, sem pontuação e sem partículas."""
-    palavras = re.sub(r"[^A-Z ]", " ", sem_acento(nome or "").upper()).split()
-    return " ".join(p for p in palavras if p not in PARTICULAS)
+    """O nome só para comparar: maiúsculas, sem acento, sem pontuação e sem partículas.
+
+    Letra seguida de ponto é inicial, não partícula: o "E." de "MARIA E. SILVA" fica.
+    """
+    palavras = re.findall(r"[A-Z]+\.?", sem_acento(nome or "").upper())
+    return " ".join(p.rstrip(".") for p in palavras if p.endswith(".") or p not in PARTICULAS)
+
+
+def _mesma_palavra(a: str, b: str) -> bool:
+    # "E" (de "E.") é a inicial de "EXEMPLO".
+    return a == b or (len(a) == 1 and b.startswith(a)) or (len(b) == 1 and a.startswith(b))
+
+
+def abreviacao(a: str | None, b: str | None) -> bool:
+    """O mesmo nome, com ou sem iniciais no lugar de palavras: "MARIA E. DA SILVA" e "MARIA EXEMPLO DA SILVA".
+
+    O primeiro nome e o sobrenome têm de estar por extenso e iguais nos dois.
+    """
+    x, y = chave_nome(a).split(), chave_nome(b).split()
+    return (len(x) == len(y) >= 2 and x[0] == y[0] and x[-1] == y[-1]
+            and all(_mesma_palavra(p, q) for p, q in zip(x, y)))
+
+
+def mesma_pessoa(a: str | None, b: str | None) -> bool:
+    """Nomes que podem ser da mesma pessoa: iguais, abreviados ou com nomes do meio omitidos.
+
+    Serve para decidir de quem é um documento, não para dizer que dois valores são iguais.
+    """
+    x, y = chave_nome(a).split(), chave_nome(b).split()
+    if not x or not y or x[0] != y[0] or x[-1] != y[-1]:
+        return False
+    # "D." e "E." abreviam partículas ("DE", "E"), que a comparação já ignora.
+    x, y = ([p for p in nome if p not in ("D", "E")] for nome in (x, y))
+    curto, longo = (x, y) if len(x) <= len(y) else (y, x)
+    j = 0
+    for palavra in curto:
+        while j < len(longo) and not _mesma_palavra(palavra, longo[j]):
+            j += 1
+        if j == len(longo):
+            return False
+        j += 1
+    return True
+
+
+def nome_mais_completo(nomes: list[str]) -> str:
+    """Entre abreviações do mesmo nome, a que tem mais letras por extenso."""
+    return max(nomes, key=lambda n: len(chave_nome(n).replace(" ", "")))
 
 
 def _minusculo(texto: str) -> str:
@@ -198,7 +251,7 @@ PARENTESCO = [
     (r"conjuge|espos|marido|mulher", "conjuge"),
 ]
 
-SEXO = [(r"^\s*(?:m|masc|masculino|homem)\s*$", "M"), (r"^\s*(?:f|fem|feminino|mulher)\s*$", "F")]
+SEXO = [(r"^\s*(?:m|masc|masculin[oa]|homem)\s*$", "M"), (r"^\s*(?:f|fem|feminin[oa]|mulher)\s*$", "F")]
 
 SIM_NAO = [(r"^\s*(?:nao|n)\b", False), (r"^\s*(?:sim|s)\b", True)]
 
@@ -230,8 +283,27 @@ def grau_instrucao(texto: str | None) -> str | None:
     return None
 
 
+MESES = {
+    "janeiro": 1, "fevereiro": 2, "marco": 3, "abril": 4, "maio": 5, "junho": 6, "julho": 7, "agosto": 8,
+    "setembro": 9, "outubro": 10, "novembro": 11, "dezembro": 12,
+}
+MESES |= {nome[:3]: n for nome, n in MESES.items()}
+
+
+def _mes_por_extenso(valor: str) -> str:
+    """"24 de junho de 1998", "1º de maio de 2000" e "24/JUN/1998" → "24/06/1998"; o resto fica como veio."""
+    t = sem_acento(valor).lower().strip()
+    m = (re.fullmatch(r"(\d{1,2})\s*[ºo°]?\s+de\s+([a-z]+)\s+de\s+(\d{4})\.?", t)
+         or re.fullmatch(r"(\d{1,2})\s*[/. -]\s*([a-z]{3,9})\.?\s*[/. -]\s*(\d{4})", t))
+    if m and m.group(2) in MESES:
+        return f"{int(m.group(1)):02d}/{MESES[m.group(2)]:02d}/{m.group(3)}"
+    return valor
+
+
 def _data(valor: str, futura: bool) -> tuple:
-    # A CIN e outros documentos imprimem "05 / 03 / 1990"; certidões, às vezes, "05.03.1990".
+    # A CIN e outros documentos imprimem "05 / 03 / 1990"; certidões, às vezes, "05.03.1990" ou
+    # "24 DE JUNHO DE 1998".
+    valor = _mes_por_extenso(valor)
     iso = data_iso(re.sub(r"^(\d{2})\s*[/.-]\s*(\d{2})\s*[/.-]\s*(\d{4})", r"\1/\2/\3", valor.strip()))
     if not iso or iso < "1900-01-01":
         return None, "data inválida"
@@ -280,7 +352,9 @@ def _cep(valor: str) -> tuple:
 
 
 def _uf(valor: str) -> tuple:
-    uf = valor.strip().upper()
+    # Certidões antigas escrevem o estado por extenso ("AMAZONAS").
+    uf = re.sub(r"\s+", " ", sem_acento(valor).strip().upper().removeprefix("ESTADO DO ").removeprefix("ESTADO DE "))
+    uf = NOMES_UF.get(uf, uf)
     return (uf, None) if uf in UFS else (None, "UF inválida")
 
 
