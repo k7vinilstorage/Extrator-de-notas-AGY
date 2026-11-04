@@ -13,7 +13,7 @@ CAMPOS_DOCUMENTO = {
     "rg": {
         "numero": "maiusculo", "orgao_emissor": "maiusculo", "uf_emissor": "uf", "data_expedicao": "data",
         "cpf": "cpf", "data_nascimento": "data", "sexo": "sexo", "nome_mae": "nome", "nome_pai": "nome",
-        "naturalidade": "maiusculo", "uf_naturalidade": "uf", "nacionalidade": "maiusculo",
+        "naturalidade": "maiusculo", "uf_naturalidade": "uf", "nacionalidade": "nacionalidade",
     },
     "cnh": {
         "numero_registro": "cnh", "categoria": "categoria_cnh", "uf_emissor": "uf", "data_emissao": "data",
@@ -23,7 +23,7 @@ CAMPOS_DOCUMENTO = {
     },
     "cpf": {"cpf": "cpf", "data_nascimento": "data"},
     "ctps_digital": {
-        "cpf": "cpf", "data_nascimento": "data", "sexo": "sexo", "nacionalidade": "maiusculo",
+        "cpf": "cpf", "data_nascimento": "data", "sexo": "sexo", "nacionalidade": "nacionalidade",
         "nome_mae": "nome", "nome_pai": "nome", "numero": "maiusculo", "serie": "maiusculo", "uf": "uf",
         "pis": "pis",
     },
@@ -58,7 +58,7 @@ CAMPOS_DOCUMENTO = {
     },
     # Carta proposta, contrato de trabalho ou de experiência, encaminhamento admissional, ficha de registro.
     "contrato_trabalho": {
-        "empregador": "maiusculo", "cargo": "maiusculo", "funcao": "maiusculo", "cbo": "cbo",
+        "empregador": "maiusculo", "empregador_cnpj": "cnpj", "cargo": "maiusculo", "funcao": "maiusculo", "cbo": "cbo",
         "salario": "dinheiro", "tipo_salario": "tipo_salario", "data_admissao": "data_futura",
         "tipo_contrato": "tipo_contrato", "experiencia_dias": "inteiro", "prorrogacao_dias": "inteiro",
         "data_termino": "data_futura", "horario_entrada": "hora", "horario_saida": "hora",
@@ -121,7 +121,7 @@ CAMPOS_TEXTO = {
     "funcionario.estado_civil": "estado_civil",
     "funcionario.raca_cor": "raca_cor",
     "funcionario.grau_instrucao": "grau_instrucao",
-    "funcionario.nacionalidade": "maiusculo",
+    "funcionario.nacionalidade": "nacionalidade",
     "funcionario.pais_nascimento": "maiusculo",
     "funcionario.pis": "pis",
     "funcionario.telefone": "telefone",
@@ -140,6 +140,7 @@ CAMPOS_TEXTO = {
     "funcionario.banco.tipo_conta": "texto",
     "funcionario.banco.pix": "texto",
     "contrato.empregador": "maiusculo",
+    "contrato.empregador_cnpj": "cnpj",
     "contrato.data_admissao": "data_futura",
     "contrato.cargo": "maiusculo",
     "contrato.funcao": "maiusculo",

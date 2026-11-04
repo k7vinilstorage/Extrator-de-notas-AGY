@@ -259,7 +259,10 @@ documentos se resolvem assim:
   e o conteúdo fica fora da ficha;
 - comprovante de residência em nome de outra pessoa → continua sendo do titular, com `aviso`;
 - comprovante de escolaridade, PIS, dados bancários, contrato, declaração de VT e ASO → do
-  titular (os quatro últimos com `aviso` se estiverem em nome de outra pessoa).
+  titular (os quatro últimos com `aviso` se estiverem em nome de outra pessoa);
+- documento sem nome legível (manuscrito, foto ruim) e sem CPF ou nascimento de um dependente →
+  do titular, com `aviso` para confirmar. No teste real, a CTPS física às vezes vinha sem nome e
+  levava junto o PIS.
 
 Os nomes são comparados depois de normalizados: maiúsculas, sem acento, sem espaço duplo e sem
 partículas (`DE`, `DA`, `DO`, `DAS`, `DOS`, `E`). O nome normalizado só serve para comparar; a
@@ -343,7 +346,7 @@ quer exigir é uma das dúvidas.
 | `sexo` | `"M"\|"F"\|null` | doc\|texto: certidao_nascimento > rg (CIN) > ctps_digital | sim | Nunca deduzido do nome |
 | `nome_mae` | `str?` | doc: certidao_nascimento > rg > cnh > titulo_eleitor | não | Igual a `nome` |
 | `nome_pai` | `str?` | doc: igual a `nome_mae` | não | Igual a `nome` |
-| `nacionalidade` | `str?` | doc\|texto: rg > ctps_digital; deduzida `"BRASILEIRA"` da certidão de nascimento brasileira | sim | — |
+| `nacionalidade` | `str?` | doc\|texto: rg > ctps_digital; deduzida `"BRASILEIRA"` da certidão de nascimento brasileira | sim | "BRASILEIRO", "Brasil" e "BRASILEIRO(A)" viram `"BRASILEIRA"`; masculino e feminino não divergem |
 | `pais_nascimento` | `str?` | doc\|texto: certidao_nascimento > rg | sim | — |
 | `municipio_nascimento` | `str?` | doc: certidao_nascimento > rg > cnh | não | Maiúsculas |
 | `uf_nascimento` | `str?` | doc: igual ao anterior | não | Uma das 27 UFs |
@@ -434,6 +437,7 @@ que a planilha do escritório diz que se preenchem no Domínio.
 | Campo | Tipo | Esperado | Validação |
 |---|---|---|---|
 | `empregador` | `str?` | não | Como escrito (nome comercial e razão social podem divergir) |
+| `empregador_cnpj` | `str?` | não | DV do CNPJ; formato `00.000.000/0000-00` |
 | `data_admissao` | `str?` | sim | Data completa; de 30 dias atrás a 60 dias à frente (`aviso` fora disso); funcionário com ao menos 14 anos nela |
 | `cargo` | `str?` | sim | Maiúsculas |
 | `funcao` | `str?` | não | — |
@@ -443,7 +447,7 @@ que a planilha do escritório diz que se preenchem no Domínio.
 | `tipo_contrato` | `enum?` | sim | `indeterminado`, `determinado`, `experiencia` |
 | `experiencia` | `obj?` | se `experiencia` | `{dias, prorrogacao_dias}`; total ≤ 90 |
 | `data_termino` | `str?` | se `determinado` | > `data_admissao`; no máximo 2 anos depois |
-| `horario` | `obj?` | sim | `{entrada, saida, intervalo_inicio, intervalo_fim, intervalo_minutos, dias}`; horas `HH:MM`; saída depois da entrada (ou jornada noturna, com `aviso`) |
+| `horario` | `obj?` | sim | `{entrada, saida, intervalo_inicio, intervalo_fim, intervalo_minutos, dias}`; horas `HH:MM`; saída depois da entrada (ou jornada noturna, com `aviso`). Com mais de um horário (dias úteis e sábado), `entrada` e `saida` são os dos dias úteis e `dias` traz a jornada completa como escrita |
 | `escala` | `str?` | não | Ex.: `5x2`, `6x1`, `12x36` |
 | `jornada_semanal_horas` | `number?` | não | Só quando escrita (o código não calcula pelo horário); `aviso` acima de 44 |
 | `local_trabalho` | `str?` | não | Como escrito |

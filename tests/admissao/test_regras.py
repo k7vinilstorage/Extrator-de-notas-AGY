@@ -201,3 +201,16 @@ def test_mesma_pessoa_com_particula_abreviada():
                                       ("mato grosso do sul", "MS"), ("Mato Grosso", "MT"), ("sc", "SC")])
 def test_uf_por_extenso(texto, uf):
     assert regras.normalizar("uf", texto) == (uf, None)
+
+
+@pytest.mark.parametrize("texto,esperado", [
+    ("BRASILEIRO", "BRASILEIRA"), ("brasileira", "BRASILEIRA"), ("Brasil", "BRASILEIRA"),
+    ("BRASILEIRO(A)", "BRASILEIRA"), ("brasileira nata", "BRASILEIRA"), ("italiano", "ITALIANO"),
+])
+def test_nacionalidade(texto, esperado):
+    assert regras.normalizar("nacionalidade", texto) == (esperado, None)
+
+
+def test_cnpj():
+    assert regras.normalizar("cnpj", "11222333000181") == ("11.222.333/0001-81", None)
+    assert "dígito verificador" in regras.normalizar("cnpj", "11.222.333/0001-82")[1]
