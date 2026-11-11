@@ -22,7 +22,7 @@ def test_releitura_resolve_divergencia(monkeypatch):
         return item(nome, "05/03/1990")
 
     monkeypatch.setattr(fluxo, "ler_arquivo", reler)
-    r = fluxo.concluir([item("rg.jpg", "05/03/1993"), item("cpf.jpg", "05/03/1990")], com_texto=False, config=Config())
+    r = fluxo.concluir([item("rg.jpg", "05/03/1993"), item("cpf.jpg", "05/03/1990")], config=Config())
     assert r["ficha"]["funcionario"]["data_nascimento"] == "1990-03-05"
     assert not any(a["tipo"] == "divergente" for a in r["alertas"])
     assert sorted(pedidos) == [("cpf.jpg", ["data_nascimento (CPF)"]), ("rg.jpg", ["data_nascimento (RG)"])]
@@ -31,13 +31,13 @@ def test_releitura_resolve_divergencia(monkeypatch):
 
 def test_sem_config_nao_rele(monkeypatch):
     monkeypatch.setattr(fluxo, "ler_arquivo", lambda *a: (_ for _ in ()).throw(AssertionError("releu")))
-    r = fluxo.concluir([item("rg.jpg", "05/03/1993"), item("cpf.jpg", "05/03/1990")], com_texto=False)
+    r = fluxo.concluir([item("rg.jpg", "05/03/1993"), item("cpf.jpg", "05/03/1990")])
     assert any(a["tipo"] == "divergente" for a in r["alertas"])
 
 
 def test_falha_na_releitura_mantem_a_leitura_anterior(monkeypatch):
     monkeypatch.setattr(fluxo, "ler_arquivo", lambda *a: (_ for _ in ()).throw(ErroAgy(DICA_LOGIN)))
-    r = fluxo.concluir([item("rg.jpg", "05/03/1993"), item("cpf.jpg", "05/03/1990")], com_texto=False, config=Config())
+    r = fluxo.concluir([item("rg.jpg", "05/03/1993"), item("cpf.jpg", "05/03/1990")], config=Config())
     assert any(a["campo"] == "funcionario.data_nascimento" and a["tipo"] == "divergente" for a in r["alertas"])
 
 

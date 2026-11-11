@@ -194,3 +194,69 @@ def test_so_docx_vazio(cliente):
 def test_docx_nao_vale_nas_notas(cliente):
     r = cliente.post("/extrair", files={"arquivo": ("nota.docx", b"x")}, headers=AUTH)
     assert r.status_code == 415
+
+
+# --- complemento: arquivos e texto acrescentados depois -------------------------------
+
+def test_complemento(cliente):
+    r = cliente.post("/admissoes", data={"texto": TEXTO}, headers=AUTH).json()
+    esperar(cliente, r["url"])
+    c = cliente.post(f"{r['url']}/complemento", files=[("arquivos", ("rg.jpg", b"x"))], headers=AUTH)
+    assert c.status_code == 202
+    assert c.json() == {"id": r["id"], "total": 2, "complemento": 1, "url": r["url"]}
+    adm = esperar(cliente, r["url"])
+    assert adm["status"] == "concluido" and adm["complementos"] == 1 and adm["concluidos"] == 2
+    assert [(d["arquivo"], d.get("complemento")) for d in adm["documentos"]] == [
+        ("texto", None), ("rg.jpg (complemento 1)", 1)]
+    assert adm["ficha"]["funcionario"]["cpf"] == CPF, "o RG do complemento entrou na ficha"
+    assert adm["origens"]["funcionario.cpf"][0]["complemento"] == 1
+    assert adm["ficha"]["contrato"]["cargo"] == "AUXILIAR ADMINISTRATIVO", "o texto de antes continua"
+    interno = api.admissoes[r["id"]]
+    assert not interno["_dir"].exists() and interno["_dir"] not in api.pastas_em_uso
+    assert all(lido.get("_caminho") is None for lido in interno["_resultados"]), "o arquivo foi apagado"
+    assert not any(k.startswith("_") for k in adm)
+
+
+def test_complemento_recusado(cliente, monkeypatch):
+    assert cliente.post("/admissoes/nao-existe/complemento", data={"texto": TEXTO}, headers=AUTH).status_code == 404
+    r = cliente.post("/admissoes", data={"texto": TEXTO}, headers=AUTH).json()
+    url = f"{r['url']}/complemento"
+    esperar(cliente, r["url"])
+    assert cliente.post(url, data={}, headers=AUTH).status_code == 400
+
+    api.admissoes[r["id"]]["status"] = "processando"
+    lendo = cliente.post(url, data={"texto": "cargo SDR"}, headers=AUTH)
+    assert lendo.status_code == 409 and "ainda está sendo lida" in lendo.json()["detail"]
+    api.admissoes[r["id"]]["status"] = "concluido"
+
+    falha = cliente.post(url, files=[("arquivos", ("a.txt", b"x"))], headers=AUTH)
+    assert falha.status_code == 415
+    adm = cliente.get(r["url"], headers=AUTH).json()
+    assert (adm["status"], adm["complementos"]) == ("concluido", 0), "o envio recusado não estraga a ficha"
+    assert "concluido_em" in api.admissoes[r["id"]], "e ela volta a expirar"
+
+    monkeypatch.setattr(api, "MAX_COMPLEMENTOS", 1)
+    assert cliente.post(url, data={"texto": "cargo SDR"}, headers=AUTH).status_code == 202
+    esperar(cliente, r["url"])
+    limite = cliente.post(url, data={"texto": "cargo SDR"}, headers=AUTH)
+    assert limite.status_code == 409 and "no máximo 1" in limite.json()["detail"]
+
+
+def test_complemento_sem_login_volta_a_ficha_de_antes(cliente):
+    r = cliente.post("/admissoes", data={"texto": TEXTO}, files=[("arquivos", ("rg.jpg", b"x"))], headers=AUTH).json()
+    antes = esperar(cliente, r["url"])
+    cliente.post(f"{r['url']}/complemento", files=[("arquivos", ("cnh.jpg", b"sem login"))], headers=AUTH)
+    depois = esperar(cliente, r["url"])
+    assert depois["status"] == "concluido" and depois["complementos"] == 0
+    assert depois["ficha"] == antes["ficha"] and depois["documentos"] == antes["documentos"]
+    assert any(a["mensagem"].startswith("o complemento 1 não foi lido") for a in depois["alertas"])
+    de_novo = cliente.post(f"{r['url']}/complemento", data={"texto": "cargo SDR"}, headers=AUTH)
+    assert de_novo.status_code == 202 and de_novo.json()["complemento"] == 1
+
+
+def test_complemento_apagado_enquanto_le(cliente):
+    r = cliente.post("/admissoes", data={"texto": TEXTO}, headers=AUTH).json()
+    esperar(cliente, r["url"])
+    assert cliente.post(f"{r['url']}/complemento", data={"texto": "cargo SDR"}, headers=AUTH).status_code == 202
+    assert cliente.delete(r["url"], headers=AUTH).status_code == 204
+    assert cliente.get(r["url"], headers=AUTH).status_code == 404

@@ -41,6 +41,7 @@ Todas exigem `Authorization: Bearer`, como as demais. `/extrair` e `/lotes` não
 |---|---|---|
 | `POST /admissoes` | Recebe arquivos e texto e devolve `202` com o `id` | imediato |
 | `GET /admissoes/{id}` | Andamento e, quando terminar, ficha, origens e alertas | imediato |
+| `POST /admissoes/{id}/complemento` | Acrescenta arquivos e texto a uma admissão já lida (`202`) | imediato |
 | `DELETE /admissoes/{id}` | Apaga a ficha da memória assim que o painel a tiver guardado | imediato |
 | `POST /admissao` | Mesmo processamento, mas espera e devolve o resultado | 30 s a 3 min |
 
@@ -80,6 +81,34 @@ seg a sex 8h às 17h com 1h de almoço, 45 dias de experiência + 45. Quer vale-
 ```
 
 `total` conta os arquivos mais 1 quando há texto, porque o texto também é uma chamada do agy.
+
+### Complemento
+
+Quando a conferência mostra que faltou um documento ou uma informação (o estado civil, o
+comprovante de residência), `POST /admissoes/{id}/complemento`, com as mesmas partes de
+`POST /admissoes`, acrescenta o que veio depois, sem mandar tudo de novo:
+
+- só o que é novo vai ao agy. A ficha é montada de novo com as leituras de antes e as novas
+  juntas, então quem é quem, as divergências e os alertas saem da mesma consolidação. A
+  certidão de um filho mandada depois é ligada à mãe que veio nos documentos de antes, e um
+  documento novo que contradiz um de antes vira `divergente`, como se tivessem vindo juntos;
+- **no texto, o complemento corrige**: todo campo que ele cita (com trecho, mesmo o que não
+  converteu) substitui o do texto de antes, com os problemas dele. O resto do texto de antes
+  continua valendo. Dependente citado de novo é o mesmo, pelo nome, e `outras_informacoes`
+  se somam;
+- os arquivos do complemento ganham o número no nome (`rg.jpg (complemento 1)`), e o
+  documento, a origem de cada campo que veio dele e o item `texto` dele trazem
+  `"complemento": 1`;
+- enquanto o complemento é lido, a admissão volta a `processando` (`total` e `concluidos`
+  contam todas as rodadas) e não expira. Se ele não chegar ao fim (o agy sem login, por
+  exemplo), ela volta à ficha de antes, com um `aviso` dizendo que o complemento não entrou;
+- os arquivos de antes já foram apagados: a releitura do que diverge só relê os novos;
+- até `EXTRATOR_MAX_COMPLEMENTOS` (padrão 5) por admissão. `409` quando ela ainda está sendo
+  lida, terminou com erro ou passou do limite; `404` quando não existe mais.
+
+Para guardar as leituras de um complemento para o próximo, a admissão concluída mantém na
+memória, até expirar ou ser apagada, o que foi lido de cada arquivo e do texto (o mesmo dado
+pessoal da ficha, campo a campo).
 
 ### Resposta de `GET /admissoes/{id}` e `POST /admissao`
 
@@ -165,6 +194,7 @@ Um PDF ilegível não dá `422` na admissão: ele vira erro só daquele document
 |---|---|---|
 | `EXTRATOR_MAX_ARQUIVOS_ADMISSAO` | `20` | Arquivos por admissão |
 | `EXTRATOR_ADMISSAO_TTL_MIN` | `30` | Minutos que uma admissão concluída fica na memória (menos que o lote: tem dado pessoal) |
+| `EXTRATOR_MAX_COMPLEMENTOS` | `5` | Complementos por admissão |
 
 O processamento usa o mesmo `executor` de `/extrair` e `/lotes`, então `EXTRATOR_PARALELO`
 limita o total.
@@ -505,7 +535,9 @@ instruções anteriores" no meio do texto foi tratada como dado.
   entra em `faxina.PREFIXOS_TMP`, e a pasta fica em `pastas_em_uso` enquanto houver algo na
   fila, como nos lotes.
 - **Na memória, só pelo tempo necessário.** A admissão concluída fica em memória por
-  `EXTRATOR_ADMISSAO_TTL_MIN` (padrão 30). O painel deve chamar `DELETE /admissoes/{id}`
+  `EXTRATOR_ADMISSAO_TTL_MIN` (padrão 30), contados do fim da última leitura (um
+  complemento recomeça a conta). Junto com a ficha ficam as leituras de cada arquivo e do
+  texto, para um complemento montar a ficha de novo. O painel deve chamar `DELETE /admissoes/{id}`
   assim que guardar a ficha. Um restart apaga tudo.
 - **Logs.** Nenhum log do extrator inclui valor de campo, o texto, o nome de arquivo enviado
   (costuma ter o nome da pessoa: `rg maria.jpg`) ou mensagem de alerta. Só se registram o id da
@@ -540,8 +572,8 @@ nenhuma classe além do estado interno da consolidação.
 | `admissao/documentos.py` | Prompt e chamada do agy para um arquivo (grupos de 4 páginas), normalização e conferência por documento, releitura |
 | `admissao/texto.py` | Prompt e chamada do agy para o texto (em `informacoes.txt`), conversão dos campos |
 | `admissao/ficha.py` | Consolidação: titular × dependentes, mesclagem, divergências, precedência, origens e conferências da ficha inteira |
-| `admissao/fluxo.py` | Uma tarefa por arquivo e uma para o texto, que a API roda no executor; `concluir` monta a ficha |
-| `api.py` (alterado) | Rotas `/admissoes` e `/admissao` |
+| `admissao/fluxo.py` | Uma tarefa por arquivo e uma para o texto, que a API roda no executor; `concluir` monta a ficha; `com_complemento` e `mesclar_textos` para os complementos |
+| `api.py` (alterado) | Rotas `/admissoes`, `/admissoes/{id}/complemento` e `/admissao` |
 
 Formato de uma fonte, que liga `documentos.py` e `texto.py` a `ficha.py`:
 
