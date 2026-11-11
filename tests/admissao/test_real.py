@@ -28,7 +28,7 @@ def admissao():
     config = Config(limpar_historico=True, timeout_s=180)
     with ThreadPoolExecutor(4) as executor:
         resultados = list(executor.map(lambda tarefa: tarefa(), fluxo.tarefas(arquivos, texto, config)))
-    return fluxo.concluir(resultados, com_texto=True)
+    return fluxo.concluir(resultados)
 
 
 def test_titular(admissao):

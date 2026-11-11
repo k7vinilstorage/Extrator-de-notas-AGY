@@ -51,6 +51,8 @@ LOTE_TTL_S = int(os.environ.get("EXTRATOR_LOTE_TTL_MIN", "60")) * 60
 MAX_ARQUIVOS_ADMISSAO = int(os.environ.get("EXTRATOR_MAX_ARQUIVOS_ADMISSAO", "20"))
 # Menor que o dos lotes: a ficha de admissão é cheia de dado pessoal.
 ADMISSAO_TTL_S = int(os.environ.get("EXTRATOR_ADMISSAO_TTL_MIN", "30")) * 60
+# Complementos (arquivos e texto acrescentados depois) de uma mesma admissão.
+MAX_COMPLEMENTOS = int(os.environ.get("EXTRATOR_MAX_COMPLEMENTOS", "5"))
 # Ligada só na imagem Docker: fora dela, os dados do agy são os do usuário.
 FAXINA = os.environ.get("EXTRATOR_FAXINA", "0") != "0"
 
@@ -357,16 +359,31 @@ async def _receber_admissao(arquivos: list[UploadFile], dicas: list, texto: str 
 
 
 def _finalizar_admissao(adm: dict):
+    """Monta a ficha com todas as leituras. Num complemento que não chegou ao fim, a de antes volta."""
+    anterior = adm.pop("_anterior", None)
     try:
         if adm["status"] == "processando":
-            adm |= admissao.concluir(adm["_resultados"], adm["_com_texto"], CONFIG)
+            ficha = admissao.concluir(adm["_resultados"], CONFIG)
+            # Para um próximo complemento: as leituras que valeram, sem o arquivo (apagado abaixo).
+            adm["_resultados"] = [r | {"_caminho": None} for r in ficha.pop("_leituras")]
+            adm |= ficha
             adm["status"] = "concluido"
     except Exception as e:  # registra na admissão para ela não ficar travada
         # Só o tipo do erro: a mensagem pode ter dado pessoal lido dos documentos.
         log.error("admissão %s: erro ao montar a ficha (%s)", adm["id"], type(e).__name__)
         adm |= {"status": "erro", "erro": "erro interno ao montar a ficha"}
     finally:
-        adm["_resultados"] = None
+        if anterior is not None and adm["status"] == "erro":
+            # O agy perdeu o login no meio, ou a ficha não montou: a admissão continua com a
+            # ficha de antes, e o alerta diz que este complemento não entrou.
+            motivo = adm.pop("erro", None) or "erro ao ler"
+            n = adm["_complementos"]
+            adm |= anterior | {"status": "concluido", "resultado": "alerta", "_complementos": n - 1}
+            adm["alertas"] = adm["alertas"] + [{
+                "campo": None, "tipo": "aviso", "arquivo": None,
+                "mensagem": f"o complemento {n} não foi lido ({motivo}); a ficha continua como estava"}]
+        elif adm["status"] != "concluido":
+            adm["_resultados"] = None
         adm["concluido_em"] = time.time()
         with trava:
             pastas_em_uso.discard(adm["_dir"])
@@ -388,6 +405,8 @@ def _rodar_tarefa_admissao(adm: dict, i: int, tarefa):
             log.error("admissão %s: erro ao ler o item %d (%s)", adm["id"], i + 1, type(e).__name__)
             resultado = {"status": "erro", "erro": "erro interno"}
     resultado = {**resultado, "arquivo": item["arquivo"]}
+    if item.get("complemento"):  # também no erro, que não passa por fluxo.com_complemento
+        resultado["complemento"] = item["complemento"]
     adm["_resultados"][i] = resultado
     item |= {k: resultado[k] for k in ("status", "erro") if k in resultado}
     with trava:
@@ -422,9 +441,10 @@ async def criar_admissao(arquivos: Arquivos = None, texto: Texto = None, tipos: 
         "concluidos": 0,
         "documentos": [{"arquivo": nome, "status": "pendente"} for _, nome, _ in entradas]
                       + ([{"arquivo": "texto", "status": "pendente"}] if texto else []),
+        "complementos": 0,
         "_dir": diretorio,
         "_resultados": [None] * len(lista),
-        "_com_texto": texto is not None,
+        "_complementos": 0,
     }
     with trava:
         admissoes[id_] = adm
@@ -432,6 +452,64 @@ async def criar_admissao(arquivos: Arquivos = None, texto: Texto = None, tipos: 
     for i, tarefa in enumerate(lista):
         executor.submit(_rodar_tarefa_admissao, adm, i, tarefa)
     return {"id": id_, "total": adm["total"], "url": f"/admissoes/{id_}"}
+
+
+# O que volta quando um complemento não chega ao fim (e o que o GET mostra enquanto ele é lido).
+_ANTES_DO_COMPLEMENTO = ("documentos", "ficha", "origens", "alertas", "resultado", "total", "concluidos",
+                         "complementos", "_resultados")
+
+
+@app.post("/admissoes/{id_}/complemento", status_code=202, dependencies=[Depends(autenticar)],
+          summary="Acrescenta arquivos e texto a uma admissão já lida e monta a ficha de novo")
+async def complementar_admissao(id_: str, arquivos: Arquivos = None, texto: Texto = None, tipos: Tipos = None):
+    """Só o que é novo vai ao agy; a ficha sai da consolidação das leituras de antes e das novas.
+
+    Enquanto o complemento é lido, a admissão volta a `processando`. Se ele não chegar ao fim
+    (agy sem login, por exemplo), ela volta à ficha de antes, com um aviso.
+    """
+    arquivos = arquivos or []
+    texto, dicas = _validar_admissao(arquivos, texto, tipos)
+    _expirar(admissoes, ADMISSAO_TTL_S)
+    agendar_faxina()
+    with trava:
+        adm = admissoes.get(id_)
+        if adm is None:
+            raise HTTPException(404, "admissão não encontrada (ou expirada, ou apagada)")
+        if adm["status"] != "concluido" or adm.get("_resultados") is None:
+            motivo = ("ainda está sendo lida: espere terminar" if adm["status"] == "processando"
+                      else "não terminou bem: envie de novo")
+            raise HTTPException(409, f"a admissão {motivo}")
+        if adm["_complementos"] >= MAX_COMPLEMENTOS:
+            raise HTTPException(409, f"no máximo {MAX_COMPLEMENTOS} complementos por admissão: envie de novo")
+        # Reservada já: um segundo complemento ao mesmo tempo recebe o 409 acima.
+        anterior = {k: adm[k] for k in _ANTES_DO_COMPLEMENTO}
+        n = adm["_complementos"] + 1
+        adm |= {"status": "processando", "_anterior": anterior, "_complementos": n}
+        concluido_em = adm.pop("concluido_em", None)  # lendo, não expira
+
+    diretorio = Path(tempfile.mkdtemp(prefix="extrator-admissao-"))
+    try:
+        entradas, texto, anexos = await _receber_admissao(arquivos, dicas, texto, diretorio)
+    except BaseException:
+        shutil.rmtree(diretorio, ignore_errors=True)
+        with trava:
+            adm |= adm.pop("_anterior") | {"status": "concluido", "_complementos": n - 1,
+                                           "concluido_em": concluido_em}
+        raise
+
+    # O nome diz de qual rodada é o arquivo (e não colide com um de antes, como "print-1.png").
+    entradas = [(caminho, f"{nome} (complemento {n})", dica) for caminho, nome, dica in entradas]
+    lista = [admissao.com_complemento(t, n) for t in admissao.tarefas(entradas, texto, CONFIG, anexos)]
+    novos = [{"arquivo": nome, "status": "pendente", "complemento": n} for _, nome, _ in entradas] \
+        + ([{"arquivo": "texto", "status": "pendente", "complemento": n}] if texto else [])
+    with trava:
+        inicio = len(adm["_resultados"])
+        adm |= {"documentos": adm["documentos"] + novos, "_resultados": adm["_resultados"] + [None] * len(lista),
+                "total": adm["total"] + len(lista), "complementos": n, "_dir": diretorio}
+        pastas_em_uso.add(diretorio)
+    for k, tarefa in enumerate(lista):
+        executor.submit(_rodar_tarefa_admissao, adm, inicio + k, tarefa)
+    return {"id": id_, "total": adm["total"], "complemento": n, "url": f"/admissoes/{id_}"}
 
 
 @app.get("/admissoes/{id_}", dependencies=[Depends(autenticar)],
@@ -470,5 +548,6 @@ async def ler_admissao(arquivos: Arquivos = None, texto: Texto = None, tipos: Ti
         except admissao.SemLogin as e:
             raise HTTPException(503, f"falha no agy: {e}") from None
         # Dentro do with: a releitura de documentos divergentes ainda usa os arquivos.
-        ficha = await asyncio.to_thread(admissao.concluir, list(resultados), texto is not None, CONFIG)
+        ficha = await asyncio.to_thread(admissao.concluir, list(resultados), CONFIG)
+    ficha.pop("_leituras")
     return {"status": "concluido", **ficha}

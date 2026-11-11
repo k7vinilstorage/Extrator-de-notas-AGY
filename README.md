@@ -90,6 +90,7 @@ Para atualizar o agy, reconstrua a imagem sem cache: `docker compose build --no-
 | `EXTRATOR_LOTE_TTL_MIN` | `60` | Minutos que um lote concluído fica disponível |
 | `EXTRATOR_MAX_ARQUIVOS_ADMISSAO` | `20` | Arquivos por admissão |
 | `EXTRATOR_ADMISSAO_TTL_MIN` | `30` | Minutos que uma admissão concluída fica disponível (tem dado pessoal) |
+| `EXTRATOR_MAX_COMPLEMENTOS` | `5` | Complementos (arquivos e texto acrescentados depois) por admissão |
 | `EXTRATOR_LIMPAR_HISTORICO` | `1` | Apaga o histórico que o agy grava de cada conversa (~1 MB por nota) |
 | `EXTRATOR_FAXINA` | `1` na imagem | Faxina automática (veja [Faxina](#faxina)). Já vem ligada no Dockerfile |
 | `TZ` | `America/Sao_Paulo` | Fuso horário do container |
@@ -190,6 +191,16 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/admissoes/8c1e...
 curl -X DELETE -H "Authorization: Bearer $TOKEN" http://localhost:8000/admissoes/8c1e...
 ```
 
+Faltou um documento ou uma informação? `POST /admissoes/{id}/complemento` (as mesmas partes)
+acrescenta arquivos e texto à admissão já lida: só o que é novo vai ao agy, e a ficha é montada de
+novo com tudo junto. No texto, o que o complemento cita substitui o que o texto de antes dizia.
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" -F "arquivos=@comprovante.pdf" -F "texto=Casada, parda" \
+     http://localhost:8000/admissoes/8c1e.../complemento
+# {"id": "8c1e...", "total": 5, "complemento": 1, "url": "/admissoes/8c1e..."}
+```
+
 Quando dois documentos discordam (nome diferente no RG e na CTPS, por exemplo), o campo vem
 `null` e o alerta traz os candidatos: quem revisa decide. Apague a admissão com `DELETE` assim
 que guardar a ficha; senão ela some em `EXTRATOR_ADMISSAO_TTL_MIN`. `POST /admissao` faz o mesmo
@@ -203,6 +214,7 @@ e espera o resultado (de 30 s a alguns minutos). Detalhes, campos e alertas em
 | 400 | Admissão sem arquivo nem texto, ou `tipos` inválido |
 | 401 | Token ausente ou errado |
 | 404 | Lote ou admissão não encontrado (ou expirado) |
+| 409 | Complemento de uma admissão que ainda está sendo lida, que terminou com erro, ou além de `EXTRATOR_MAX_COMPLEMENTOS` |
 | 413 | Arquivo grande demais, arquivos demais no lote ou na admissão, ou texto longo demais |
 | 415 | Formato não suportado |
 | 422 | PDF ilegível ou protegido por senha |

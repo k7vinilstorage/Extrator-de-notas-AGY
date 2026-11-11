@@ -179,6 +179,10 @@ def _ref(fonte: dict, campo: str) -> dict:
         ref["trecho"] = fonte.get("trechos", {}).get(campo)
     if fonte["tipo"] == "deduzido":
         ref["deduzido"] = True
+    # De um complemento (fluxo.com_complemento): o texto dele é "texto" como o primeiro, e é
+    # só por aqui que a origem diz de qual saiu. No texto juntado, o número é por campo.
+    if complemento := (fonte.get("complementos") or {}).get(campo) or fonte.get("complemento"):
+        ref["complemento"] = complemento
     return ref
 
 
@@ -455,9 +459,11 @@ def _dependentes(dependentes: list[dict], texto: dict | None, titular: dict, m: 
         if d is None:
             d = {"nome": lido["nome"], "fontes": [], "sem_documento": True}
             dependentes.append(d)
-        trechos = {c: lido["trecho"] for c in ("nome", "parentesco", "irrf", "salario_familia")}
+        trechos = {c: lido.get("trecho") for c in ("nome", "parentesco", "irrf", "salario_familia")}
+        complemento = lido.get("complemento") or (texto or {}).get("complemento")
         d["fontes"].append({"arquivo": "texto", "tipo": "texto", "trechos": trechos,
-                            "campos": {k: v for k, v in lido.items() if k != "trecho"}})
+                            "campos": {k: v for k, v in lido.items() if k not in ("trecho", "complemento")}}
+                           | ({"complemento": complemento} if complemento else {}))
 
     fichas = []
     for i, d in enumerate(dependentes):
@@ -536,7 +542,7 @@ def montar(arquivos: list[dict], texto: dict | None) -> dict:
 
     resumo = []
     for a in arquivos:
-        item = {k: a[k] for k in ("arquivo", "status", "paginas_lidas", "erro", "relido") if k in a}
+        item = {k: a[k] for k in ("arquivo", "status", "paginas_lidas", "erro", "relido", "complemento") if k in a}
         if a["status"] == "ok":
             item["tipos"] = [f["tipo"] for f in a["fontes"]]
             item["descricoes"] = [f.get("descricao") for f in a["fontes"]]
