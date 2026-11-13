@@ -56,7 +56,7 @@ validação, ela passa com folga do minuto e meio que proxies e clientes HTTP co
 
 | Parte | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
-| `arquivos` | arquivo, repetido | sim* | Os documentos (`.pdf`, `.jpg`, `.jpeg`, `.png`, `.webp`, e `.docx`, que entra como texto). Até `EXTRATOR_MAX_ARQUIVOS_ADMISSAO` (padrão 20) |
+| `arquivos` | arquivo, repetido | sim* | Os documentos (`.pdf`, `.jpg`, `.jpeg`, `.png`, `.webp`, e `.docx`, que entra como texto). Até `EXTRATOR_MAX_ARQUIVOS_ADMISSAO` (padrão 30) |
 | `texto` | texto livre | sim* | As informações escritas, como chegaram. Até 10 000 caracteres |
 | `tipos` | texto (JSON) | não | Lista na mesma ordem de `arquivos`, com o tipo de cada um ou `null`. Ex.: `["rg", null, "ctps_digital"]` |
 
@@ -214,7 +214,7 @@ Um PDF ilegível não dá `422` na admissão: ele vira erro só daquele document
 
 | Variável | Padrão | Descrição |
 |---|---|---|
-| `EXTRATOR_MAX_ARQUIVOS_ADMISSAO` | `20` | Arquivos por admissão |
+| `EXTRATOR_MAX_ARQUIVOS_ADMISSAO` | `30` | Arquivos por admissão |
 | `EXTRATOR_ADMISSAO_TTL_MIN` | `30` | Minutos que uma admissão concluída fica na memória (menos que o lote: tem dado pessoal) |
 | `EXTRATOR_MAX_COMPLEMENTOS` | `5` | Complementos por admissão |
 
