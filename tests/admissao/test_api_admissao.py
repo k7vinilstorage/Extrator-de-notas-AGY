@@ -260,3 +260,62 @@ def test_complemento_apagado_enquanto_le(cliente):
     assert cliente.post(f"{r['url']}/complemento", data={"texto": "cargo SDR"}, headers=AUTH).status_code == 202
     assert cliente.delete(r["url"], headers=AUTH).status_code == 204
     assert cliente.get(r["url"], headers=AUTH).status_code == 404
+
+
+def test_complemento_so_com_campos_volta_pronto_e_sem_agy(cliente, lidos, monkeypatch):
+    r = cliente.post("/admissoes", data={"texto": TEXTO}, files=[("arquivos", ("rg.jpg", b"x"))], headers=AUTH).json()
+    antes = esperar(cliente, r["url"])
+    assert any(a["campo"] == "funcionario.estado_civil" for a in antes["alertas"])
+    monkeypatch.setattr(fluxo, "ler_arquivo", lambda *a, **k: pytest.fail("chamou o agy"))
+    monkeypatch.setattr(fluxo, "ler_texto", lambda *a, **k: pytest.fail("chamou o agy"))
+    monkeypatch.setattr(api, "MAX_COMPLEMENTOS", 0)  # só campos não conta no limite
+
+    url = f"{r['url']}/complemento"
+    c = cliente.post(url, data={"campos": '{"funcionario.estado_civil": "casado", "contrato.salario": "2.800,00"}'},
+                     headers=AUTH)
+    assert c.status_code == 202 and c.json() == {"id": r["id"], "total": 2, "complemento": None, "url": r["url"]}
+    adm = cliente.get(r["url"], headers=AUTH).json()
+    assert adm["status"] == "concluido", "na mesma resposta, sem esperar"
+    assert (adm["ficha"]["funcionario"]["estado_civil"], adm["ficha"]["contrato"]["salario"]) == ("casado", 2800.0)
+    assert adm["origens"]["funcionario.estado_civil"] == [{"arquivo": "painel", "tipo": "informado"}]
+    assert not any(a["campo"] == "funcionario.estado_civil" for a in adm["alertas"])
+    assert adm["documentos"] == antes["documentos"] and adm["complementos"] == 0
+    assert adm["ficha"]["contrato"]["cargo"] == "AUXILIAR ADMINISTRATIVO", "as leituras de antes continuam"
+    assert "concluido_em" in api.admissoes[r["id"]], "e ela volta a expirar"
+
+    cliente.post(url, data={"campos": '{"funcionario.raca_cor": "parda"}'}, headers=AUTH)
+    adm = cliente.get(r["url"], headers=AUTH).json()
+    assert (adm["ficha"]["funcionario"]["estado_civil"], adm["ficha"]["funcionario"]["raca_cor"]) == ("casado", "parda"), \
+        "o informado antes continua valendo"
+
+
+def test_complemento_com_campo_invalido_nao_mexe_na_ficha(cliente):
+    r = cliente.post("/admissoes", data={"texto": TEXTO}, headers=AUTH).json()
+    antes = esperar(cliente, r["url"])
+    url = f"{r['url']}/complemento"
+    ruim = cliente.post(url, data={"campos": '{"funcionario.cpf": "11111111111"}'}, headers=AUTH)
+    assert ruim.status_code == 400 and "funcionario.cpf" in ruim.json()["detail"]
+    assert cliente.post(url, data={"campos": '{"funcionario.cpf": ""}'}, headers=AUTH).status_code == 400, \
+        "só campo vazio é o mesmo que não mandar nada"
+    depois = cliente.get(r["url"], headers=AUTH).json()
+    assert depois == antes
+    api.admissoes[r["id"]]["status"] = "processando"
+    lendo = cliente.post(url, data={"campos": '{"funcionario.raca_cor": "parda"}'}, headers=AUTH)
+    assert lendo.status_code == 409
+
+
+def test_campos_junto_com_arquivo_e_complemento_que_falha_os_desfaz(cliente):
+    r = cliente.post("/admissoes", data={"texto": TEXTO}, headers=AUTH).json()
+    esperar(cliente, r["url"])
+    url = f"{r['url']}/complemento"
+    c = cliente.post(url, data={"campos": '{"funcionario.raca_cor": "parda"}'},
+                     files=[("arquivos", ("rg.jpg", b"x"))], headers=AUTH)
+    assert c.status_code == 202 and c.json()["complemento"] == 1
+    adm = esperar(cliente, r["url"])
+    assert adm["ficha"]["funcionario"]["raca_cor"] == "parda" and adm["ficha"]["funcionario"]["cpf"] == CPF
+
+    cliente.post(url, data={"campos": '{"funcionario.raca_cor": "branca"}'},
+                 files=[("arquivos", ("cnh.jpg", b"sem login"))], headers=AUTH)
+    depois = esperar(cliente, r["url"])
+    assert depois["ficha"]["funcionario"]["raca_cor"] == "parda", "o complemento que não entrou leva os campos junto"
+    assert api.admissoes[r["id"]]["_informados"] == {"funcionario.raca_cor": "parda"}

@@ -157,8 +157,11 @@ def _reler(arquivos: list[dict], pedidos: dict[str, list[str]], config: Config) 
     return novos
 
 
-def concluir(resultados: list[dict], config: Config | None = None) -> dict:
+def concluir(resultados: list[dict], config: Config | None = None, informados: dict | None = None) -> dict:
     """Monta a ficha a partir dos resultados das tarefas (arquivos e textos, de todas as rodadas).
+
+    `informados` são os campos que a pessoa informou no painel (informados.ler): valem acima
+    de qualquer leitura, e o campo informado não é relido.
 
     Com `config`, os arquivos de campos que divergiram entre documentos são relidos uma vez
     antes da ficha final (pode levar mais uma chamada do agy por arquivo envolvido).
@@ -169,11 +172,11 @@ def concluir(resultados: list[dict], config: Config | None = None) -> dict:
     arquivos = [r for r in resultados if not eh_texto(r)]
     textos = [r for r in resultados if eh_texto(r)]
     fonte_texto = mesclar_textos([t["fonte"] for t in textos if t["status"] == "ok"])
-    r = montar(arquivos, fonte_texto)
+    r = montar(arquivos, fonte_texto, informados)
     pedidos = r.pop("_reler")
     if pedidos and config is not None:
         arquivos = _reler(arquivos, pedidos, config)
-        r = montar(arquivos, fonte_texto)
+        r = montar(arquivos, fonte_texto, informados)
         r.pop("_reler")
     resumo, lidos = iter(r["documentos"]), iter(arquivos)
     documentos, leituras = [], []

@@ -201,6 +201,15 @@ curl -H "Authorization: Bearer $TOKEN" -F "arquivos=@comprovante.pdf" -F "texto=
 # {"id": "8c1e...", "total": 5, "complemento": 1, "url": "/admissoes/8c1e..."}
 ```
 
+O que quem confere já sabe vai em `campos` (JSON `{caminho: valor}`), sem passar pelo agy: vale
+acima de qualquer leitura, com a origem `informado`. Só com `campos`, a ficha volta pronta na
+mesma resposta e o envio não conta no limite de complementos.
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" -F 'campos={"funcionario.estado_civil": "casado"}' \
+     http://localhost:8000/admissoes/8c1e.../complemento
+```
+
 Quando dois documentos discordam (nome diferente no RG e na CTPS, por exemplo), o campo vem
 `null` e o alerta traz os candidatos: quem revisa decide. Apague a admissão com `DELETE` assim
 que guardar a ficha; senão ela some em `EXTRATOR_ADMISSAO_TTL_MIN`. `POST /admissao` faz o mesmo
