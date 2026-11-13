@@ -17,8 +17,11 @@ ROTULOS = {
     "comprovante_pis": "comprovante do PIS", "dados_bancarios": "dados bancários", "texto": "texto",
     "deduzido": "certidão", "contrato_trabalho": "contrato ou proposta de trabalho",
     "declaracao_vale_transporte": "declaração de vale-transporte", "outro": "documento não reconhecido",
-    "aso": "ASO",
+    "aso": "ASO", "informado": "informado no painel",
 }
+
+# Origem de um campo informado à mão por quem confere a ficha (ver informados.py).
+INFORMADO = {"arquivo": "painel", "tipo": "informado"}
 
 IDENTIDADE = ("ctps_digital", "rg", "cnh", "cpf", "titulo_eleitor")
 # Documentos que, entregues na admissão, são do funcionário mesmo em nome de outra pessoa.
@@ -488,8 +491,11 @@ def _dependentes(dependentes: list[dict], texto: dict | None, titular: dict, m: 
     return fichas
 
 
-def montar(arquivos: list[dict], texto: dict | None) -> dict:
+def montar(arquivos: list[dict], texto: dict | None, informados: dict | None = None) -> dict:
     """Junta os arquivos lidos (documentos.ler_arquivo, ou com status erro) e o texto lido numa ficha.
+
+    `informados` ({caminho: valor}, já convertidos por informados.ler) vale acima de tudo: é a
+    pessoa que confere dizendo o valor, e os alertas de antes sobre o campo saem.
 
     Devolve ficha, origens, alertas e o resumo de cada arquivo (tipos lidos e de quem é).
     """
@@ -527,6 +533,7 @@ def montar(arquivos: list[dict], texto: dict | None) -> dict:
         # Formulário que repete o nome civil no campo de nome social: não há nome social.
         ficha["funcionario"]["nome_social"] = None
         m.origens.pop("funcionario.nome_social", None)
+    _informar(ficha, informados or {}, m)
     ficha["funcionario"] = _esvaziar(ficha["funcionario"])
     ficha["contrato"] = _esvaziar(ficha["contrato"])
     ficha["dependentes"] = _dependentes(dependentes, texto, ficha["funcionario"], m)
@@ -550,6 +557,15 @@ def montar(arquivos: list[dict], texto: dict | None) -> dict:
         resumo.append(item)
     return {"documentos": resumo, "ficha": ficha, "origens": m.origens, "alertas": m.alertas,
             "_reler": _releituras(m.divergencias)}
+
+
+def _informar(ficha: dict, informados: dict, m: _Montagem) -> None:
+    """O que a pessoa informou entra no lugar do que foi lido (antes das conferências, que valem para ele)."""
+    for caminho, valor in informados.items():
+        _definir(ficha, caminho, valor)
+        m.origens[caminho] = [dict(INFORMADO)]
+        m.divergencias.pop(caminho, None)  # não há o que reler
+    m.alertas = [a for a in m.alertas if a["campo"] not in informados]
 
 
 def _releituras(divergencias: dict[str, list[tuple[dict, str]]]) -> dict[str, list[str]]:

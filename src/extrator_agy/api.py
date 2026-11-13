@@ -25,6 +25,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from . import __version__
 from .admissao import fluxo as admissao
+from .admissao import informados as informados_admissao
 from .admissao.schema import TIPOS as TIPOS_DOCUMENTO
 from .admissao.docx import DocxInvalido, texto_docx
 from .admissao.texto import MAX_CARACTERES, MAX_CARACTERES_TOTAL
@@ -310,11 +311,14 @@ Arquivos = Annotated[list[UploadFile] | None,
                      File(description="Documentos do funcionário (imagens ou PDFs; .docx entra como texto)")]
 Texto = Annotated[str | None, Form(description="Informações escritas: cargo, salário, horário etc.")]
 Tipos = Annotated[str | None, Form(description='JSON com o tipo de cada arquivo, na mesma ordem, ou null. Ex.: ["rg", null]')]
+Campos = Annotated[str | None, Form(description='JSON com os campos informados por quem confere, que valem acima '
+                                                'das leituras. Ex.: {"funcionario.estado_civil": "casado"}')]
 
 
-def _validar_admissao(arquivos: list[UploadFile], texto: str | None, tipos: str | None) -> tuple[str | None, list]:
+def _validar_admissao(arquivos: list[UploadFile], texto: str | None, tipos: str | None,
+                      com_campos: bool = False) -> tuple[str | None, list]:
     texto = (texto or "").strip() or None
-    if not arquivos and not texto:
+    if not arquivos and not texto and not com_campos:
         raise HTTPException(400, "envie ao menos um arquivo ou o texto")
     if len(arquivos) > MAX_ARQUIVOS_ADMISSAO:
         raise HTTPException(413, f"no máximo {MAX_ARQUIVOS_ADMISSAO} arquivos por admissão")
@@ -363,7 +367,7 @@ def _finalizar_admissao(adm: dict):
     anterior = adm.pop("_anterior", None)
     try:
         if adm["status"] == "processando":
-            ficha = admissao.concluir(adm["_resultados"], CONFIG)
+            ficha = admissao.concluir(adm["_resultados"], CONFIG, adm["_informados"])
             # Para um próximo complemento: as leituras que valeram, sem o arquivo (apagado abaixo).
             adm["_resultados"] = [r | {"_caminho": None} for r in ficha.pop("_leituras")]
             adm |= ficha
@@ -445,6 +449,7 @@ async def criar_admissao(arquivos: Arquivos = None, texto: Texto = None, tipos: 
         "_dir": diretorio,
         "_resultados": [None] * len(lista),
         "_complementos": 0,
+        "_informados": {},
     }
     with trava:
         admissoes[id_] = adm
@@ -456,21 +461,11 @@ async def criar_admissao(arquivos: Arquivos = None, texto: Texto = None, tipos: 
 
 # O que volta quando um complemento não chega ao fim (e o que o GET mostra enquanto ele é lido).
 _ANTES_DO_COMPLEMENTO = ("documentos", "ficha", "origens", "alertas", "resultado", "total", "concluidos",
-                         "complementos", "_resultados")
+                         "complementos", "_resultados", "_informados")
 
 
-@app.post("/admissoes/{id_}/complemento", status_code=202, dependencies=[Depends(autenticar)],
-          summary="Acrescenta arquivos e texto a uma admissão já lida e monta a ficha de novo")
-async def complementar_admissao(id_: str, arquivos: Arquivos = None, texto: Texto = None, tipos: Tipos = None):
-    """Só o que é novo vai ao agy; a ficha sai da consolidação das leituras de antes e das novas.
-
-    Enquanto o complemento é lido, a admissão volta a `processando`. Se ele não chegar ao fim
-    (agy sem login, por exemplo), ela volta à ficha de antes, com um aviso.
-    """
-    arquivos = arquivos or []
-    texto, dicas = _validar_admissao(arquivos, texto, tipos)
-    _expirar(admissoes, ADMISSAO_TTL_S)
-    agendar_faxina()
+def _reservar_para_complemento(id_: str, conta_no_limite: bool) -> dict:
+    """A admissão, já marcada como `processando` (um segundo complemento ao mesmo tempo recebe 409)."""
     with trava:
         adm = admissoes.get(id_)
         if adm is None:
@@ -479,13 +474,59 @@ async def complementar_admissao(id_: str, arquivos: Arquivos = None, texto: Text
             motivo = ("ainda está sendo lida: espere terminar" if adm["status"] == "processando"
                       else "não terminou bem: envie de novo")
             raise HTTPException(409, f"a admissão {motivo}")
-        if adm["_complementos"] >= MAX_COMPLEMENTOS:
+        if conta_no_limite and adm["_complementos"] >= MAX_COMPLEMENTOS:
             raise HTTPException(409, f"no máximo {MAX_COMPLEMENTOS} complementos por admissão: envie de novo")
-        # Reservada já: um segundo complemento ao mesmo tempo recebe o 409 acima.
-        anterior = {k: adm[k] for k in _ANTES_DO_COMPLEMENTO}
+        adm["_anterior"] = {k: adm[k] for k in _ANTES_DO_COMPLEMENTO} | {"concluido_em": adm.pop("concluido_em", None)}
+        adm["status"] = "processando"
+        return adm
+
+
+def _so_campos(adm: dict, informados: dict) -> dict:
+    """Complemento só com campos informados: nada vai ao agy, e a ficha é montada de novo na hora."""
+    anterior = adm.pop("_anterior")
+    try:
+        juntos = adm["_informados"] | informados
+        ficha = admissao.concluir(adm["_resultados"], None, juntos)
+        ficha.pop("_leituras")  # sem releitura, são as mesmas
+    except Exception as e:
+        log.error("admissão %s: erro ao montar a ficha com os campos informados (%s)", adm["id"], type(e).__name__)
+        with trava:
+            adm |= anterior | {"status": "concluido"}
+        raise HTTPException(500, "erro interno ao montar a ficha") from None
+    with trava:
+        adm |= ficha | {"status": "concluido", "_informados": juntos, "concluido_em": time.time()}
+    return {"id": adm["id"], "total": adm["total"], "complemento": None, "url": f"/admissoes/{adm['id']}"}
+
+
+@app.post("/admissoes/{id_}/complemento", status_code=202, dependencies=[Depends(autenticar)],
+          summary="Acrescenta arquivos e texto a uma admissão já lida e monta a ficha de novo")
+async def complementar_admissao(id_: str, arquivos: Arquivos = None, texto: Texto = None, tipos: Tipos = None,
+                                campos: Campos = None):
+    """Só o que é novo vai ao agy; a ficha sai da consolidação das leituras de antes e das novas.
+
+    Enquanto o complemento é lido, a admissão volta a `processando`. Se ele não chegar ao fim
+    (agy sem login, por exemplo), ela volta à ficha de antes, com um aviso.
+
+    `campos` são valores informados por quem confere a ficha: valem acima das leituras e não
+    passam pelo agy. Só com eles (sem arquivo nem texto), a ficha volta pronta na mesma resposta,
+    e o envio não conta no limite de complementos.
+    """
+    arquivos = arquivos or []
+    try:
+        informados = informados_admissao.ler(campos)
+    except informados_admissao.CampoInvalido as e:
+        raise HTTPException(400, str(e)) from None
+    texto, dicas = _validar_admissao(arquivos, texto, tipos, com_campos=bool(informados))
+    _expirar(admissoes, ADMISSAO_TTL_S)
+    agendar_faxina()
+    if not arquivos and not texto:
+        return _so_campos(_reservar_para_complemento(id_, conta_no_limite=False), informados)
+
+    adm = _reservar_para_complemento(id_, conta_no_limite=True)
+    with trava:
         n = adm["_complementos"] + 1
-        adm |= {"status": "processando", "_anterior": anterior, "_complementos": n}
-        concluido_em = adm.pop("concluido_em", None)  # lendo, não expira
+        concluido_em = adm["_anterior"].pop("concluido_em")  # lendo, não expira
+        adm |= {"_complementos": n, "_informados": adm["_informados"] | informados}
 
     diretorio = Path(tempfile.mkdtemp(prefix="extrator-admissao-"))
     try:

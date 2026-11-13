@@ -106,6 +106,28 @@ comprovante de residência), `POST /admissoes/{id}/complemento`, com as mesmas p
 - até `EXTRATOR_MAX_COMPLEMENTOS` (padrão 5) por admissão. `409` quando ela ainda está sendo
   lida, terminou com erro ou passou do limite; `404` quando não existe mais.
 
+**Campos informados** (a partir da 0.8.0): a parte `campos` do complemento é um JSON
+`{caminho: valor}` com o que quem confere a ficha digitou ou escolheu num formulário
+(`{"funcionario.estado_civil": "casado", "funcionario.endereco.cep": "80010-000"}`). É o caminho
+para o que falta sem depender de mais uma leitura:
+
+- vale para os campos do funcionário e do contrato que o texto pode citar
+  (`informados.INFORMAVEIS`: `CAMPOS_TEXTO` que estão no `TITULAR`). Os valores passam pelas
+  mesmas regras do texto (`regras.FORMATOS`): datas em `DD/MM/AAAA` ou ISO, dinheiro em reais,
+  CPF e CEP com ou sem pontuação, e nos enums tanto a palavra ("casada") quanto o valor do enum
+  (`uniao_estavel`, `pos_graduacao`). Vazio é ignorado;
+- campo desconhecido ou valor que não converte → `400`, com todos os campos recusados de uma
+  vez e sem repetir o valor (`funcionario.cpf: CPF com dígito verificador inválido`). Nada muda;
+- na ficha, o informado **vale acima de qualquer documento e do texto**: o campo recebe o valor,
+  a origem é `[{"arquivo": "painel", "tipo": "informado"}]` e os alertas de antes sobre ele
+  (divergente, ausente, inválido) saem; o campo não é relido. As conferências de plausibilidade
+  (idade, CEP × UF, término antes da admissão…) continuam valendo para ele;
+- o informado continua valendo nos complementos seguintes (o mais novo ganha, campo a campo);
+  num complemento que não chega ao fim, os campos dele saem junto;
+- **só com `campos`** (sem arquivo nem texto), nada vai ao agy: a ficha é montada de novo na hora
+  e já está `concluido` quando a resposta (`202`, com `"complemento": null`) chega. Esse envio não
+  conta no limite de complementos.
+
 Para guardar as leituras de um complemento para o próximo, a admissão concluída mantém na
 memória, até expirar ou ser apagada, o que foi lido de cada arquivo e do texto (o mesmo dado
 pessoal da ficha, campo a campo).
@@ -573,6 +595,7 @@ nenhuma classe além do estado interno da consolidação.
 | `admissao/texto.py` | Prompt e chamada do agy para o texto (em `informacoes.txt`), conversão dos campos |
 | `admissao/ficha.py` | Consolidação: titular × dependentes, mesclagem, divergências, precedência, origens e conferências da ficha inteira |
 | `admissao/fluxo.py` | Uma tarefa por arquivo e uma para o texto, que a API roda no executor; `concluir` monta a ficha; `com_complemento` e `mesclar_textos` para os complementos |
+| `admissao/informados.py` | Os campos informados no painel (`campos` do complemento): quais podem ser informados e a conversão pelas regras do texto |
 | `api.py` (alterado) | Rotas `/admissoes`, `/admissoes/{id}/complemento` e `/admissao` |
 
 Formato de uma fonte, que liga `documentos.py` e `texto.py` a `ficha.py`:

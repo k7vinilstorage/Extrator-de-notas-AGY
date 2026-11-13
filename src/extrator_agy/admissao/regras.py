@@ -259,6 +259,14 @@ INCOMPLETO = r"incomplet|cursando|trancad|em andamento|interromp|nao conclu"
 COMPLETO = r"complet|conclu|formad|diploma|certificad|bacharel|licenciad"
 
 
+# Os valores do enum, na ordem do eSocial (docs/ADMISSAO.md).
+GRAUS_INSTRUCAO = (
+    "analfabeto", "fundamental_ate_5_incompleto", "fundamental_5_completo", "fundamental_6_a_9_incompleto",
+    "fundamental_completo", "medio_incompleto", "medio_completo", "superior_incompleto", "superior_completo",
+    "pos_graduacao", "mestrado", "doutorado",
+)
+
+
 def grau_instrucao(texto: str | None) -> str | None:
     """Grau de instrução (enum da ficha) pelo nível e situação escritos; None se não der para saber.
 
