@@ -88,7 +88,7 @@ Para atualizar o agy, reconstrua a imagem sem cache: `docker compose build --no-
 | `EXTRATOR_MAX_MB` | `20` | Tamanho máximo por arquivo |
 | `EXTRATOR_MAX_ARQUIVOS_LOTE` | `100` | Arquivos por lote |
 | `EXTRATOR_LOTE_TTL_MIN` | `60` | Minutos que um lote concluído fica disponível |
-| `EXTRATOR_MAX_ARQUIVOS_ADMISSAO` | `20` | Arquivos por admissão |
+| `EXTRATOR_MAX_ARQUIVOS_ADMISSAO` | `30` | Arquivos por admissão |
 | `EXTRATOR_ADMISSAO_TTL_MIN` | `30` | Minutos que uma admissão concluída fica disponível (tem dado pessoal) |
 | `EXTRATOR_MAX_COMPLEMENTOS` | `5` | Complementos (arquivos e texto acrescentados depois) por admissão |
 | `EXTRATOR_LIMPAR_HISTORICO` | `1` | Apaga o histórico que o agy grava de cada conversa (~1 MB por nota) |

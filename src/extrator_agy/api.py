@@ -49,7 +49,7 @@ PARALELO = int(os.environ.get("EXTRATOR_PARALELO", "4"))
 MAX_BYTES = int(os.environ.get("EXTRATOR_MAX_MB", "20")) * 1024 * 1024
 MAX_ARQUIVOS_LOTE = int(os.environ.get("EXTRATOR_MAX_ARQUIVOS_LOTE", "100"))
 LOTE_TTL_S = int(os.environ.get("EXTRATOR_LOTE_TTL_MIN", "60")) * 60
-MAX_ARQUIVOS_ADMISSAO = int(os.environ.get("EXTRATOR_MAX_ARQUIVOS_ADMISSAO", "20"))
+MAX_ARQUIVOS_ADMISSAO = int(os.environ.get("EXTRATOR_MAX_ARQUIVOS_ADMISSAO", "30"))
 # Menor que o dos lotes: a ficha de admissão é cheia de dado pessoal.
 ADMISSAO_TTL_S = int(os.environ.get("EXTRATOR_ADMISSAO_TTL_MIN", "30")) * 60
 # Complementos (arquivos e texto acrescentados depois) de uma mesma admissão.
