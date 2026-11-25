@@ -86,9 +86,22 @@ def test_chave_nome():
     ("fundamental incompleto", None),  # não diz até que ano
     ("Ensino médio", None),  # não diz se concluiu
     ("Curso de Excel", None),
+    ("médio comp.", "medio_completo"),
+    ("superior inc.", "superior_incompleto"),
+    ("graduada em Pedagogia", "superior_completo"),
+    ("Ciência da Computação", None),
 ])
 def test_grau_instrucao(texto, grau):
     assert regras.grau_instrucao(texto) == grau
+
+
+@pytest.mark.parametrize("texto,grau", [
+    ("Ensino médio", "medio_completo"), ("2º grau", "medio_completo"), ("Superior", "superior_completo"),
+    ("ensino médio incompleto", None), ("cursando faculdade", None), ("fundamental incompleto", None),
+    ("Curso de Excel", None), (None, None),
+])
+def test_grau_presumido(texto, grau):
+    assert regras.grau_presumido(texto) == grau
 
 
 @pytest.mark.parametrize("formato,valor,esperado", [

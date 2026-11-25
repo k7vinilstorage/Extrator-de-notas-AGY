@@ -118,6 +118,9 @@ def mesclar_textos(fontes: list[dict]) -> dict | None:
         for campo in citados:
             junta["campos"][campo] = nova["campos"].get(campo)
             junta["trechos"][campo] = nova["trechos"][campo]
+            junta.setdefault("presumidos", {}).pop(campo, None)
+            if campo in (nova.get("presumidos") or {}):
+                junta["presumidos"][campo] = nova["presumidos"][campo]
             if n:
                 junta["complementos"][campo] = n
         junta["problemas"] = [p for p in junta["problemas"] if p["campo"] not in citados] + [

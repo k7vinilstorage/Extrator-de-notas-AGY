@@ -47,14 +47,14 @@ def test_ler_recusa_dizendo_o_campo(campos, trecho):
 
 
 def test_informado_vale_acima_das_leituras_e_tira_os_alertas_dele():
-    # O texto diz "casada", mas a certidão de nascimento sem anotação deduz "solteiro": divergente.
-    divergente = documentos_completos() + [lido_do_texto(texto(funcionario={"estado_civil": "casada"}))]
-    antes = fluxo.concluir(divergente)
-    assert any(a["campo"] == "funcionario.estado_civil" and a["tipo"] == "divergente" for a in antes["alertas"])
+    # O texto diz "casada", mas a certidão de nascimento sem anotação deduz "solteiro": aviso.
+    com_aviso = documentos_completos() + [lido_do_texto(texto(funcionario={"estado_civil": "casada"}))]
+    antes = fluxo.concluir(com_aviso)
+    assert any(a["campo"] == "funcionario.estado_civil" and a["tipo"] == "aviso" for a in antes["alertas"])
 
-    r = fluxo.concluir(divergente, informados={"funcionario.estado_civil": "casado",
-                                               "funcionario.raca_cor": "branca"})
-    assert r["ficha"]["funcionario"]["estado_civil"] == "casado"
+    r = fluxo.concluir(com_aviso, informados={"funcionario.estado_civil": "divorciado",
+                                              "funcionario.raca_cor": "branca"})
+    assert r["ficha"]["funcionario"]["estado_civil"] == "divorciado"
     assert r["origens"]["funcionario.estado_civil"] == [INFORMADO]
     assert not any(a["campo"] in ("funcionario.estado_civil", "funcionario.raca_cor") for a in r["alertas"])
 

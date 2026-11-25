@@ -255,8 +255,8 @@ SEXO = [(r"^\s*(?:m|masc|masculin[oa]|homem)\s*$", "M"), (r"^\s*(?:f|fem|feminin
 
 SIM_NAO = [(r"^\s*(?:nao|n)\b", False), (r"^\s*(?:sim|s)\b", True)]
 
-INCOMPLETO = r"incomplet|cursando|trancad|em andamento|interromp|nao conclu"
-COMPLETO = r"complet|conclu|formad|diploma|certificad|bacharel|licenciad"
+INCOMPLETO = r"incomplet|\binc\b|\bincomp\b|cursando|trancad|em andamento|interromp|nao conclu"
+COMPLETO = r"complet|\bcomp\b|\bcompl\b|conclu|formad|graduad|diploma|certificad|bacharel|licenciad"
 
 
 # Os valores do enum, na ordem do eSocial (docs/ADMISSAO.md).
@@ -289,6 +289,17 @@ def grau_instrucao(texto: str | None) -> str | None:
     if re.search(r"fundamental|1\W?o? grau|primeiro grau|ginasi", t):
         return "fundamental_completo" if completo else None
     return None
+
+
+def grau_presumido(texto: str | None) -> str | None:
+    """O grau completo de um nível escrito sem a situação ("ensino médio", "2º grau"); senão None.
+
+    É como quem contrata costuma escrever a escolaridade de quem concluiu o nível: só se
+    diz "incompleto" ou "cursando" quando não concluiu. Por isso só vale no texto, com aviso.
+    """
+    if re.search(f"{INCOMPLETO}|{COMPLETO}", _minusculo(texto or "")):
+        return None
+    return grau_instrucao(f"{texto} completo")
 
 
 MESES = {

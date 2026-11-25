@@ -60,6 +60,15 @@ def test_o_que_nao_converte_fica_null_com_o_original():
                                                                  ("contrato.salario", "2,5 mil")}
 
 
+def test_grau_sem_situacao_e_presumido_completo():
+    t = normalizar_texto({"funcionario": {"grau_instrucao": citado("ensino médio")}})
+    assert t["campos"]["funcionario.grau_instrucao"] == "medio_completo"
+    assert t["problemas"] == [] and "funcionario.grau_instrucao" in t["presumidos"]
+    t = normalizar_texto({"funcionario": {"grau_instrucao": citado("fundamental incompleto")}})
+    assert t["campos"]["funcionario.grau_instrucao"] is None and t["presumidos"] == {}
+    assert [p["campo"] for p in t["problemas"]] == ["funcionario.grau_instrucao"]
+
+
 def test_resposta_vazia():
     t = normalizar_texto({})
     assert all(v is None for v in t["campos"].values())
