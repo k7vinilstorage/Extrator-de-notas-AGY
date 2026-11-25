@@ -2,7 +2,9 @@
 
 Quando duas fontes discordam, o código nunca escolhe: o campo fica null e o
 alerta traz os candidatos. A precedência só ordena valores iguais, para que
-as origens comecem pela fonte mais confiável.
+as origens comecem pela fonte mais confiável. A exceção são os campos que o
+funcionário declara (DECLARADOS): neles o texto vale, e o documento que discorda
+vira aviso.
 """
 
 import re
@@ -132,6 +134,12 @@ ESPERADOS_DEPENDENTE = ["nome", "data_nascimento", "parentesco"]
 # parentesco de filho pela certidão de nascimento são seguros.
 CONFIRMAR_DEDUZIDO = {"funcionario.estado_civil"}
 
+# O que o funcionário declara e o documento só sugere: o estado civil (a certidão de
+# nascimento diz solteiro até a averbação, e união estável não tem certidão) e o grau de
+# instrução (o comprovante entregue pode ser de um nível anterior ao atual). Nestes, o
+# texto vale; um documento que indique outro valor vira aviso, e não divergência.
+DECLARADOS = {"funcionario.estado_civil", "funcionario.grau_instrucao"}
+
 NOMES = ("nome", "nome_mae", "nome_pai", "titular", "conjuge_1", "conjuge_2")
 
 # Campos em que a divergência entre documentos costuma ser erro de leitura de um dígito ou
@@ -233,6 +241,14 @@ class _Montagem:
             valor = _nomes_equivalentes([v for v, _, _ in candidatos])
             if valor:
                 candidatos = [(valor, f, c) for _, f, c in candidatos]
+        if caminho in DECLARADOS and (declarado := next((c for c in candidatos if c[1]["tipo"] == "texto"), None)):
+            valor = declarado[0]
+            outros = [c for c in candidatos if _chave(caminho, c[0]) != _chave(caminho, valor)]
+            if outros:
+                rotulos = sorted({ROTULOS[f.get("tipo_original", f["tipo"])] for _, f, _ in outros})
+                self.alerta("aviso", caminho, f"{caminho}: vale o informado no texto, mas {', '.join(rotulos)} "
+                            "indica outro valor; confirme", candidatos=[{"valor": v, **_ref(f, c)} for v, f, c in outros])
+            candidatos = [c for c in candidatos if c not in outros]
         if len({_chave(caminho, v) for v, _, _ in candidatos}) > 1:
             self.divergencias[caminho] = [(f, c) for _, f, c in candidatos]
             rotulos = sorted({ROTULOS[f.get("tipo_original", f["tipo"])] for _, f, _ in candidatos})
@@ -242,6 +258,9 @@ class _Montagem:
         self.origens[caminho] = [_ref(f, c) for _, f, c in candidatos]
         if caminho in CONFIRMAR_DEDUZIDO and all(f["tipo"] == "deduzido" for _, f, _ in candidatos):
             self.alerta("aviso", caminho, f"{caminho} deduzido da certidão; confirme com o funcionário")
+        # Valor que o código completou (ver texto.normalizar_texto) e nenhuma outra fonte confirmou.
+        if all(c in f.get("presumidos", {}) for _, f, c in candidatos):
+            self.alerta("aviso", caminho, candidatos[0][1]["presumidos"][candidatos[0][2]])
         return valor
 
     def campos_com_alerta(self) -> set[str]:

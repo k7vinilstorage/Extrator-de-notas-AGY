@@ -51,10 +51,13 @@ def _citado(dados: dict, caminho: str) -> dict:
 
 def normalizar_texto(bruto: dict) -> dict:
     """Converte os campos lidos do texto. Valor que não converte vai para `problemas`, com o original."""
-    campos, trechos, problemas = {}, {}, []
+    campos, trechos, problemas, presumidos = {}, {}, [], {}
     for caminho, formato in CAMPOS_TEXTO.items():
         citado = _citado(bruto, caminho)
         campos[caminho], problema = regras.normalizar(formato, citado.get("valor"))
+        if problema and formato == "grau_instrucao" and (grau := regras.grau_presumido(citado.get("valor"))):
+            campos[caminho], problema = grau, None
+            presumidos[caminho] = "grau de instrução escrito sem dizer se foi concluído; considerado completo, confirme"
         if citado.get("valor") is not None:
             trechos[caminho] = citado.get("trecho")
         if problema:
@@ -79,7 +82,7 @@ def normalizar_texto(bruto: dict) -> dict:
 
     return {
         "arquivo": "texto", "tipo": "texto", "campos": campos, "trechos": trechos, "problemas": problemas,
-        "avisos": [], "dependentes": dependentes,
+        "presumidos": presumidos, "avisos": [], "dependentes": dependentes,
         "outras_informacoes": [t.strip() for t in bruto.get("outras_informacoes") or [] if isinstance(t, str) and t.strip()],
     }
 

@@ -77,3 +77,15 @@ def test_texto_que_nao_foi_lido_diz_de_qual_rodada():
                                                  do_complemento(2, {"arquivo": "texto", "status": "erro", "erro": "x"})])
     assert any(a["mensagem"].startswith("o texto do complemento 2 não foi lido") for a in r["alertas"])
     assert r["ficha"]["contrato"]["cargo"] == "AUXILIAR ADMINISTRATIVO", "o texto de antes continua valendo"
+
+
+def test_grau_presumido_corrigido_no_complemento_perde_o_aviso():
+    sem_comprovante = [a for a in documentos_completos() if a["arquivo"] != "diploma.jpg"]
+    primeiro = texto(funcionario={"grau_instrucao": "ensino médio"})
+    complemento = normalizar_texto({"funcionario": {"grau_instrucao": {"valor": "médio incompleto",
+                                                                       "trecho": "parou no 2º ano"}}})
+    antes = fluxo.concluir(sem_comprovante + [lido_do_texto(primeiro)])
+    assert any(a["campo"] == "funcionario.grau_instrucao" and a["tipo"] == "aviso" for a in antes["alertas"])
+    r = fluxo.concluir(sem_comprovante + [lido_do_texto(primeiro), do_complemento(1, lido_do_texto(complemento))])
+    assert r["ficha"]["funcionario"]["grau_instrucao"] == "medio_incompleto"
+    assert not any(a["campo"] == "funcionario.grau_instrucao" for a in r["alertas"])

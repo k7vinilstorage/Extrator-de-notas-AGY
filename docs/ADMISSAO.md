@@ -404,7 +404,7 @@ quer exigir é uma das dúvidas.
 | `uf_nascimento` | `str?` | doc: igual ao anterior | não | Uma das 27 UFs |
 | `estado_civil` | `enum?` | doc\|texto (veja abaixo) | sim | `solteiro`, `casado`, `divorciado`, `separado`, `viuvo`, `uniao_estavel` |
 | `raca_cor` | `enum?` | texto (autodeclaração) | sim | `branca`, `preta`, `parda`, `amarela`, `indigena`, `nao_informado` |
-| `grau_instrucao` | `enum?` | doc\|texto: comprovante_escolaridade | sim | Os 12 níveis do eSocial (tabela abaixo) |
+| `grau_instrucao` | `enum?` | doc\|texto: comprovante_escolaridade; o texto vale se divergir | sim | Os 12 níveis do eSocial (tabela abaixo) |
 | `deficiencia` | `str?` | texto | não | Como escrito; `null` se o texto não falar disso |
 | `rg` | `obj?` | doc: rg > cnh (campo "doc. identidade") | não | `{numero, orgao_emissor, uf_emissor, data_expedicao}`; data de expedição ≥ nascimento e ≤ hoje |
 | `cnh` | `obj?` | doc: cnh | não | `{numero, categoria, uf_emissor, data_emissao, data_primeira_habilitacao, validade}`; registro com 11 dígitos (o DV não é conferido: há variantes do algoritmo e nenhuma CNH real para confirmar qual vale); `aviso` se vencida; categoria em `A`, `B`, `AB`, `C`, `D`, `E`, `AC`, `AD`, `AE`, `ACC` |
@@ -431,7 +431,10 @@ quer exigir é uma das dúvidas.
 - só certidão de nascimento, sem anotação de casamento → esperado `solteiro`.
 
 Se o texto não informar, a ficha usa o esperado com `aviso` "estado civil deduzido da
-certidão". Se informar algo diferente do esperado, sai `divergente`.
+certidão". Se informar algo diferente do esperado, **vale o texto**, com `aviso` trazendo o valor
+que a certidão indica em `candidatos` (não `divergente`): quem casou ou vive em união estável
+costuma entregar só a certidão de nascimento, que diz solteiro, e um divórcio pode não estar
+averbado.
 
 `grau_instrucao`, com o código do eSocial:
 
@@ -456,6 +459,16 @@ num histórico, qual a última série aprovada. Uma tabela de palavras-chave no 
 o enum: "aprovado" sozinho não é conclusão (aparece também em quem só passou de ano), mas a série
 final aprovada é (3ª do médio; 9º ano ou 8ª série do fundamental), com `aviso` de que o grau foi
 deduzido. O que não der para definir fica `null` com alerta, e um curso livre não define grau.
+Abreviações valem ("médio comp.", "superior inc.", "graduada em…").
+
+Como no estado civil, o grau informado no **texto vale** sobre o comprovante: o documento
+entregue pode ser de um nível anterior (o certificado do médio de quem está na faculdade). Se o
+comprovante indicar outro grau, sai `aviso` com ele em `candidatos`, não `divergente`. No texto,
+um nível sem a situação ("ensino médio", "2º grau", "superior") é considerado **completo**: é
+assim que quem contrata costuma escrever, e só se diz "incompleto" ou "cursando" de quem não
+concluiu. Esse valor vem com `aviso` para confirmar, a menos que um comprovante diga o mesmo.
+Fundamental sem a situação vira `fundamental_completo`; "fundamental incompleto" continua
+`null` com alerta (o eSocial separa até o 5º ano, o 5º completo e do 6º ao 9º).
 
 Raça/cor (eSocial): `branca` 1, `preta` 2, `parda` 3, `amarela` 4, `indigena` 5,
 `nao_informado` 6. Estado civil (eSocial): `solteiro` 1, `casado` 2, `divorciado` 3,
@@ -618,7 +631,7 @@ Formato de uma fonte, que liga `documentos.py` e `texto.py` a `ficha.py`:
 | `tests/admissao/test_regras.py` | DV de PIS e título (12 e 13 dígitos, SP/MG), com números **gerados** e casos de erro (um dígito trocado, todos iguais); CEP × UF nas bordas das faixas; normalização de nome (acentos, partículas); palavras-chave de grau de instrução, estado civil e raça/cor |
 | `tests/admissao/test_documentos.py` | agy falso → documento normalizado; data `DD/MM/AAAA`; releitura quando o DV falha, ficando a leitura com menos problemas; prompt de releitura **sem** o valor lido; PDF com 10 páginas → 2 chamadas e `aviso`; erro do agy duas vezes → documento com erro |
 | `tests/admissao/test_texto.py` | `dinheiro()` em todos os formatos da tabela; data sem ano → `null` + `invalido`, nunca o ano corrente; horário e experiência; o texto vai no arquivo `informacoes.txt` e **não** no prompt; trecho fora dos campos → `outras_informacoes`; sem releitura |
-| `tests/admissao/test_ficha.py` | Titular pela CTPS e pela maioria; certidão de filho → dependente; cônjuge pela certidão de casamento; frente e verso se completando; nome divergente RG × CTPS → `null` + `divergente` com os dois candidatos; nome de casada com certidão; texto × documento divergente; estado civil deduzido e conflitante; dependente só no texto; esperados `ausente`; idade fora da faixa; `origens` com `trecho` |
+| `tests/admissao/test_ficha.py` | Titular pela CTPS e pela maioria; certidão de filho → dependente; cônjuge pela certidão de casamento; frente e verso se completando; nome divergente RG × CTPS → `null` + `divergente` com os dois candidatos; nome de casada com certidão; texto × documento divergente; estado civil deduzido e, com o texto dizendo outro, o texto valendo com aviso; grau do texto acima do comprovante e grau sem situação; dependente só no texto; esperados `ausente`; idade fora da faixa; `origens` com `trecho` |
 | `tests/admissao/test_api_admissao.py` | Rotas com a leitura falsa e a ficha de verdade: 401, 400 (nem arquivo nem texto), 413 (arquivos e texto), 415; só texto, sem arquivo; assíncrona até `concluido`; `DELETE`; TTL; pasta temporária apagada e fora de `pastas_em_uso` no fim; agy sem login (503 e `erro`); **nenhum log com CPF, nome ou texto** (`caplog`) |
 
 Fixtures: dicionários Python nos próprios testes, no formato do `structured_output` do agy. CPF,

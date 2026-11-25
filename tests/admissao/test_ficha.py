@@ -129,12 +129,46 @@ def test_nome_de_casada_explicado_pela_certidao():
     assert conjuge["nome"] == "JOSÉ DA SILVA"
 
 
-def test_texto_e_certidao_divergem_no_estado_civil():
+def test_estado_civil_do_texto_vale_e_a_certidao_vira_aviso():
+    # Certidão de casamento sem averbação, e o texto diz solteira (divorciou e não averbou?).
     arquivos = documentos_completos() + [arq("casamento.jpg", doc("certidao_casamento", None, conjuge_1="José da Silva",
                                                                    conjuge_2="Maria Exemplo da Silva"))]
     r = montar(arquivos, texto(funcionario={"estado_civil": "solteira"}))
-    assert r["ficha"]["funcionario"]["estado_civil"] is None
-    assert ("funcionario.estado_civil", "divergente") in tipos_de_alerta(r)
+    assert r["ficha"]["funcionario"]["estado_civil"] == "solteiro"
+    aviso = next(a for a in r["alertas"] if a["campo"] == "funcionario.estado_civil")
+    assert aviso["tipo"] == "aviso" and "certidão de casamento" in aviso["mensagem"]
+    assert [c["valor"] for c in aviso["candidatos"]] == ["casado"]
+
+
+def test_casada_no_texto_nao_some_pela_certidao_de_nascimento():
+    # A certidão de nascimento sem anotação diz solteira; quem casou ou vive em união estável
+    # costuma entregar só ela. O que o texto diz vale.
+    for escrito, esperado in (("casada", "casado"), ("união estável", "uniao_estavel")):
+        r = montar(documentos_completos(), texto(funcionario={"estado_civil": escrito}))
+        assert r["ficha"]["funcionario"]["estado_civil"] == esperado
+        assert r["origens"]["funcionario.estado_civil"][0]["tipo"] == "texto"
+        assert ("funcionario.estado_civil", "divergente") not in tipos_de_alerta(r)
+        assert ("funcionario.estado_civil", "aviso") in tipos_de_alerta(r)
+
+
+def test_grau_do_texto_vale_acima_do_comprovante_de_nivel_anterior():
+    # Entregou o certificado do ensino médio e está na faculdade.
+    r = montar(documentos_completos(), texto(funcionario={"grau_instrucao": "superior incompleto"}))
+    assert r["ficha"]["funcionario"]["grau_instrucao"] == "superior_incompleto"
+    aviso = next(a for a in r["alertas"] if a["campo"] == "funcionario.grau_instrucao")
+    assert aviso["tipo"] == "aviso" and [c["valor"] for c in aviso["candidatos"]] == ["medio_completo"]
+
+
+def test_grau_sem_situacao_no_texto():
+    # "Ensino médio", sem dizer se concluiu: completo, confirmado pelo comprovante (sem aviso)...
+    r = montar(documentos_completos(), texto(funcionario={"grau_instrucao": "ensino médio"}))
+    assert r["ficha"]["funcionario"]["grau_instrucao"] == "medio_completo"
+    assert not any(a["campo"] == "funcionario.grau_instrucao" for a in r["alertas"])
+    # ...ou com aviso, quando só o texto diz.
+    sem_comprovante = [a for a in documentos_completos() if a["arquivo"] != "diploma.jpg"]
+    r = montar(sem_comprovante, texto(funcionario={"grau_instrucao": "2º grau"}))
+    assert r["ficha"]["funcionario"]["grau_instrucao"] == "medio_completo"
+    assert ("funcionario.grau_instrucao", "aviso") in tipos_de_alerta(r)
 
 
 def test_estado_civil_deduzido_pede_confirmacao():
